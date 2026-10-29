@@ -11,6 +11,7 @@ import 'profile_screen.dart';
 import 'practice_screen.dart';
 import 'smart_tutor_screen.dart';
 import 'placement_test_screen.dart';
+import 'learning_history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -271,6 +272,13 @@ class _LearnTab extends StatelessWidget {
               ],
             ),
           ),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const LearningHistoryScreen()),
+          ),
+          icon: const Icon(Icons.history_rounded, color: AppColors.blue),
+          label: const Text('Learning history & review focus'),
         ),
         const SizedBox(height: 24),
         const Text(
