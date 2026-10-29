@@ -61,6 +61,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   String _heard = '';
   int? _pronunciationScore;
   Set<String> _seen = {};
+  Set<String> _weakPrompts = {};
   _TutorItem? _current;
   bool _showMeaning = false;
   String? _selected;
@@ -155,6 +156,10 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     _seen = (prefs.getStringList(_historyKey) ?? []).toSet();
+    // Pull weak prompts from the same persisted history used by lesson review.
+    final analytics = PracticeAnalyticsService();
+    await analytics.load();
+    _weakPrompts = analytics.summary.weakPrompts.map((e) => e.toLowerCase()).toSet();
     if (!mounted) return;
     setState(() { _loaded = true; _next(); });
   }
@@ -163,8 +168,10 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
 
   void _next() {
     final bank = [..._words, ..._expressions];
+    final weak = bank.where((e) => _weakPrompts.contains(e.prompt.toLowerCase())).toList();
     final unseen = bank.where((e) => !_seen.contains(_key(e))).toList();
-    final pool = unseen.isNotEmpty ? unseen : bank;
+    // Revisit known weak items first; otherwise introduce unseen material.
+    final pool = weak.isNotEmpty ? weak : (unseen.isNotEmpty ? unseen : bank);
     _current = pool[_random.nextInt(pool.length)];
     _selected = null;
     _showMeaning = false;
