@@ -1,9 +1,13 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speak_english/services/practice_analytics_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
+import '../services/learning_memory_service.dart';
+import '../services/progress_service.dart';
 import '../theme/app_theme.dart';
 
 /// Offline adaptive tutor. Questions are selected from a mixed bank and
@@ -107,6 +111,27 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
         _listening = false;
         _pronunciationScore = score;
       });
+      final item = _current;
+      if (item != null) {
+        await PracticeAnalyticsService().recordAttempt(
+          lessonId: 'smart_tutor',
+          prompt: item.prompt,
+          target: item.prompt,
+          score: score,
+          exerciseType: 'smart_tutor_speech',
+        );
+        if (score < 75 && _heard.trim().isNotEmpty && mounted) {
+          await context.read<LearningMemoryService>().recordCorrection(
+            original: _heard.trim(),
+            corrected: item.prompt,
+            explanation: 'Smart Tutor speech transcript did not closely match the target. This is transcript matching, not acoustic pronunciation analysis.',
+            example: '${item.meaning} — ${item.prompt}',
+          );
+        }
+        if (score < 45 && mounted) {
+          await context.read<ProgressService>().loseHeart();
+        }
+      }
       return;
     }
     if (!_speechReady) _speechReady = await _speech.init();
@@ -151,13 +176,31 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   Future<void> _answer(String choice) async {
     if (_selected != null || _current == null) return;
     final right = choice == _current!.answer;
+    final item = _current!;
     setState(() {
       _selected = choice;
       _showMeaning = true;
       _answered++;
       if (right) { _correct++; _streak++; } else { _streak = 0; }
-      _seen.add(_key(_current!));
+      _seen.add(_key(item));
     });
+    // Record every MCQ result in the same persistent analytics history used by lesson practice.
+    await PracticeAnalyticsService().recordAttempt(
+      lessonId: 'smart_tutor',
+      prompt: item.prompt,
+      target: item.answer,
+      score: right ? 100 : 0,
+      exerciseType: 'smart_tutor_multiple_choice',
+    );
+    if (!right && mounted) {
+      await context.read<LearningMemoryService>().recordCorrection(
+        original: choice,
+        corrected: item.answer,
+        explanation: 'Smart Tutor multiple-choice answer was incorrect.',
+        example: '${item.meaning} — ${item.prompt}',
+      );
+      if (mounted) await context.read<ProgressService>().loseHeart();
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(_historyKey, _seen.toList());
   }
