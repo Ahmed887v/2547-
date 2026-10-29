@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/speech_service.dart';
+import '../services/tts_service.dart';
 import '../theme/app_theme.dart';
 
 /// Offline adaptive tutor. Questions are selected from a mixed bank and
@@ -47,6 +49,13 @@ const _expressions = <_TutorItem>[
 class _SmartTutorScreenState extends State<SmartTutorScreen> {
   static const _historyKey = 'speaklocal_tutor_seen_v1';
   final _random = Random();
+  final _tts = TtsService();
+  final _speech = SpeechService();
+  bool _speechReady = false;
+  bool _listening = false;
+  bool _speaking = false;
+  String _heard = '';
+  int? _pronunciationScore;
   Set<String> _seen = {};
   _TutorItem? _current;
   bool _showMeaning = false;
@@ -60,6 +69,62 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   void initState() {
     super.initState();
     _load();
+    _initSpeechTools();
+  }
+
+  Future<void> _initSpeechTools() async {
+    await _tts.init();
+    _speechReady = await _speech.init();
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _tts.dispose();
+    _speech.cancel();
+    super.dispose();
+  }
+
+  Future<void> _playWord() async {
+    if (_listening) {
+      await _speech.stop();
+      if (mounted) setState(() => _listening = false);
+    }
+    setState(() => _speaking = true);
+    try {
+      await _tts.speak(_current!.prompt);
+    } finally {
+      if (mounted) setState(() => _speaking = false);
+    }
+  }
+
+  Future<void> _togglePronunciation() async {
+    if (_listening) {
+      await _speech.stop();
+      if (!mounted) return;
+      final score = PronunciationScorer.score(_current!.prompt, _heard);
+      setState(() {
+        _listening = false;
+        _pronunciationScore = score;
+      });
+      return;
+    }
+    if (!_speechReady) _speechReady = await _speech.init();
+    if (!_speechReady) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Speech recognition is unavailable. Enable English speech recognition on your phone.')),
+      );
+      return;
+    }
+    setState(() {
+      _heard = '';
+      _pronunciationScore = null;
+      _listening = true;
+    });
+    await _speech.start(onResult: (words, confidence) {
+      if (mounted) setState(() => _heard = words);
+    });
   }
 
   Future<void> _load() async {
@@ -78,6 +143,9 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
     _current = pool[_random.nextInt(pool.length)];
     _selected = null;
     _showMeaning = false;
+    _heard = '';
+    _pronunciationScore = null;
+    _listening = false;
   }
 
   Future<void> _answer(String choice) async {
@@ -147,6 +215,67 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
                     Text(item.prompt, style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w900)),
                     const SizedBox(height: 8),
                     const Text('What does it mean?', style: TextStyle(color: AppColors.muted, fontSize: 15)),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _speaking ? null : _playWord,
+                            icon: Icon(_speaking ? Icons.volume_up : Icons.headphones_rounded),
+                            label: Text(_speaking ? 'Playing…' : 'Listen'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _listening ? AppColors.red : AppColors.green,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: _togglePronunciation,
+                            icon: Icon(_listening ? Icons.stop_circle_outlined : Icons.mic_rounded),
+                            label: Text(_listening ? 'Stop & score' : 'Say it'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_heard.isNotEmpty || _pronunciationScore != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF4F7F3),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_heard.isNotEmpty)
+                              Text('You said: “$_heard”',
+                                  style: const TextStyle(fontWeight: FontWeight.w700)),
+                            if (_pronunciationScore != null) ...[
+                              const SizedBox(height: 8),
+                              Row(children: [
+                                const Text('Speech match',
+                                    style: TextStyle(fontWeight: FontWeight.w800)),
+                                const Spacer(),
+                                Text('$_pronunciationScore / 100',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      color: _pronunciationScore! >= 75
+                                          ? AppColors.greenDark
+                                          : AppColors.orange,
+                                    )),
+                              ]),
+                              const SizedBox(height: 5),
+                              Text('${PronunciationScorer.feedback(_pronunciationScore!)} This checks recognized words, not acoustic sound quality.',
+                                  style: const TextStyle(color: AppColors.muted)),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 18),
                     ...item.choices.map((choice) {
                       final chosen = _selected == choice;
@@ -195,7 +324,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
                   label: const Text('Try another question'),
                 ),
                 const SizedBox(height: 12),
-                const Text('Works offline. Questions adapt by avoiding recently seen items until the bank has been used.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted, fontSize: 12)),
+                const Text('Hear each word or expression, say it into the microphone, and get a transcript-match score. Works offline; questions avoid recently seen items until the bank has been used.', textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted, fontSize: 12)),
               ],
             ),
     );
