@@ -14,16 +14,18 @@ class PlacementTestScreen extends StatefulWidget {
 class _PlacementTestScreenState extends State<PlacementTestScreen> {
   late PlacementTestService _test;
   int? _selectedIndex;
+  PlacementQuestion? _displayedQuestion;
   bool _finished = false;
 
   @override
   void initState() {
     super.initState();
     _test = PlacementTestService();
+    _displayedQuestion = _test.nextQuestion;
   }
 
   void _answer(int index) {
-    final question = _test.nextQuestion;
+    final question = _displayedQuestion;
     if (question == null || _selectedIndex != null) return;
 
     setState(() {
@@ -37,6 +39,8 @@ class _PlacementTestScreenState extends State<PlacementTestScreen> {
       _selectedIndex = null;
       if (_test.isComplete || _test.nextQuestion == null) {
         _finished = true;
+      } else {
+        _displayedQuestion = _test.nextQuestion;
       }
     });
   }
@@ -45,13 +49,14 @@ class _PlacementTestScreenState extends State<PlacementTestScreen> {
     setState(() {
       _test.reset();
       _selectedIndex = null;
+      _displayedQuestion = _test.nextQuestion;
       _finished = false;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final question = _test.nextQuestion;
+    final question = _displayedQuestion;
     final result = _test.result;
 
     return Scaffold(
