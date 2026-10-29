@@ -1,0 +1,5 @@
+ANALYZE exit code: 
+TESTS exit code: 
+DEBUG_APK exit code: 
+RELEASE_APK exit code: 
+RELEASE_AAB exit code: 

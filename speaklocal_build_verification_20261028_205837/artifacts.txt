@@ -1,0 +1,9 @@
+-rw-rw-r-- 1 testuser testuser 202M ‏أكت ‏28 ‏21:‏18 build/app/outputs/flutter-apk/app-debug.apk
+build/app/outputs/flutter-apk/app-debug.apk: Android package (APK), with gradle app-metadata.properties
+d3ba16ec4162eeadaa9c94ae09f81a14c1f3f0949b29ce8b7bb06cc1ffc947e6  build/app/outputs/flutter-apk/app-debug.apk
+-rw-rw-r-- 1 testuser testuser 44M ‏أكت ‏28 ‏23:‏01 build/app/outputs/flutter-apk/app-release.apk
+build/app/outputs/flutter-apk/app-release.apk: Android package (APK), with gradle app-metadata.properties
+3104b966e988f045ffd013d1ccaddff3516476a4b8488a75ec45ef32065e21eb  build/app/outputs/flutter-apk/app-release.apk
+-rw-rw-r-- 1 testuser testuser 21M ‏أكت ‏28 ‏23:‏16 build/app/outputs/bundle/release/app-release.aab
+build/app/outputs/bundle/release/app-release.aab: Zip archive data, at least v0.0 to extract, compression method=deflate
+6d042e56d67bc21c990206da5b1a205e6808d9eb179348447c433b53f7e38ad2  build/app/outputs/bundle/release/app-release.aab

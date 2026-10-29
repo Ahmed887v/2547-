@@ -1,0 +1,132 @@
+import 'package:speech_to_text/speech_to_text.dart';
+
+class SpeechService {
+  final SpeechToText _speech = SpeechToText();
+  bool available = false;
+  String lastWords = '';
+  double confidence = 0;
+
+  Future<bool> init() async {
+    available = await _speech.initialize(
+      onError: (_) {},
+      onStatus: (_) {},
+    );
+    return available;
+  }
+
+  bool get isListening => _speech.isListening;
+
+  Future<void> start({
+    required void Function(String words, double confidence) onResult,
+  }) async {
+    if (!available) {
+      await init();
+    }
+    if (!available) return;
+
+    lastWords = '';
+    confidence = 0;
+    await _speech.listen(
+      onResult: (result) {
+        lastWords = result.recognizedWords;
+        confidence = result.confidence > 0 ? result.confidence : confidence;
+        onResult(lastWords, confidence);
+      },
+      listenOptions: SpeechListenOptions(
+        listenMode: ListenMode.confirmation,
+        cancelOnError: true,
+        partialResults: true,
+        localeId: 'en_US',
+      ),
+    );
+  }
+
+  Future<void> stop() async {
+    await _speech.stop();
+  }
+
+  Future<void> cancel() async {
+    await _speech.cancel();
+  }
+}
+
+/// Local pronunciation score: compare spoken text to target phrase.
+class PronunciationScorer {
+  static int score(String target, String spoken) {
+    final a = _normalize(target);
+    final b = _normalize(spoken);
+    if (a.isEmpty) return 0;
+    if (b.isEmpty) return 0;
+
+    if (a == b) return 100;
+
+    final aw = a.split(' ').where((w) => w.isNotEmpty).toList();
+    final bw = b.split(' ').where((w) => w.isNotEmpty).toSet();
+
+    var matched = 0;
+    for (final w in aw) {
+      if (bw.contains(w)) {
+        matched++;
+      } else {
+        for (final other in bw) {
+          if (_similarity(w, other) >= 0.72) {
+            matched++;
+            break;
+          }
+        }
+      }
+    }
+
+    final wordScore = aw.isEmpty ? 0.0 : matched / aw.length;
+    final editScore = _similarity(a, b);
+    final blended = (wordScore * 0.65 + editScore * 0.35) * 100;
+    return blended.round().clamp(0, 100);
+  }
+
+  static String feedback(int score) {
+    if (score >= 90) return 'Excellent! Native-like clarity.';
+    if (score >= 75) return 'Great job! Almost perfect.';
+    if (score >= 55) return 'Good try — slow down and repeat.';
+    if (score >= 35) return 'Keep going — listen again, then speak.';
+    return 'Try once more. Tap Listen first.';
+  }
+
+  static String _normalize(String s) {
+    return s
+        .toLowerCase()
+        .replaceAll(RegExp(r"[^a-z0-9\s']"), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static double _similarity(String a, String b) {
+    if (a == b) return 1;
+    if (a.isEmpty || b.isEmpty) return 0;
+    final dist = _levenshtein(a, b);
+    final maxLen = a.length > b.length ? a.length : b.length;
+    return 1 - (dist / maxLen);
+  }
+
+  static int _levenshtein(String s, String t) {
+    final m = s.length;
+    final n = t.length;
+    final dp = List.generate(m + 1, (_) => List<int>.filled(n + 1, 0));
+    for (var i = 0; i <= m; i++) {
+      dp[i][0] = i;
+    }
+    for (var j = 0; j <= n; j++) {
+      dp[0][j] = j;
+    }
+    for (var i = 1; i <= m; i++) {
+      for (var j = 1; j <= n; j++) {
+        final cost = s[i - 1] == t[j - 1] ? 0 : 1;
+        dp[i][j] = [
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + cost,
+        ].reduce((a, b) => a < b ? a : b);
+      }
+    }
+    return dp[m][n];
+  }
+}

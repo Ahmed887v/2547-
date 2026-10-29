@@ -1,0 +1,12 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:speak_english/main.dart';
+import 'package:speak_english/services/progress_service.dart';
+
+void main() {
+  testWidgets('SpeakLocal loads home', (tester) async {
+    final progress = ProgressService();
+    await tester.pumpWidget(SpeakLocalApp(progress: progress));
+    await tester.pump();
+    expect(find.text('SpeakLocal'), findsOneWidget);
+  });
+}

@@ -1,0 +1,161 @@
+==================================================
+BUILD ENVIRONMENT INVENTORY
+2026-10-25T13:57:18+03:00
+==================================================
+
+===== OS / ARCHITECTURE =====
+PRETTY_NAME="Kali GNU/Linux Rolling"
+NAME="Kali GNU/Linux"
+VERSION_ID="2026.3"
+VERSION="2026.3"
+VERSION_CODENAME=kali-rolling
+ID=kali
+ID_LIKE=debian
+HOME_URL="https://www.kali.org/"
+SUPPORT_URL="https://forums.kali.org/"
+BUG_REPORT_URL="https://bugs.kali.org/"
+ANSI_COLOR="1;31"
+Linux Ahmed 7.1.5+kali-amd64 #1 SMP PREEMPT_DYNAMIC Kali 7.1.5-1kali1 (2026-07-29) x86_64 GNU/Linux
+amd64
+
+===== JAVA / JDK =====
+--- java ---
+/usr/bin/java
+openjdk version "17.0.19" 2026-04-21
+OpenJDK Runtime Environment (build 17.0.19+10-1-deb12u2-Debian)
+OpenJDK 64-Bit Server VM (build 17.0.19+10-1-deb12u2-Debian, mixed mode, sharing)
+--- javac ---
+/usr/bin/javac
+javac 25.0.5-ea
+--- jar ---
+/usr/bin/jar
+Usage: jar [OPTION...] [ [--release VERSION] [-C dir] files] ...
+Try `jar --help' for more information.
+--- javadoc ---
+/usr/bin/javadoc
+Usage:
+    javadoc [options] [packagenames] [sourcefiles] [@files]
+For more details on available options, use --help or --help-extra
+error: No modules, packages or classes specified.
+١ error
+--- jshell ---
+/usr/bin/jshell
+jshell 25.0.5-ea
+--- JAVA_HOME ---
+JAVA_HOME=not-set
+--- alternatives ---
+/usr/lib/jvm/java-11-openjdk-amd64/bin/java
+/usr/lib/jvm/java-17-openjdk-amd64/bin/java
+/usr/lib/jvm/java-21-openjdk-amd64/bin/java
+/usr/lib/jvm/java-25-openjdk-amd64/bin/java
+/usr/lib/jvm/java-11-openjdk-amd64/bin/javac
+/usr/lib/jvm/java-17-openjdk-amd64/bin/javac
+/usr/lib/jvm/java-25-openjdk-amd64/bin/javac
+--- installed JDK packages ---
+default-jdk	2:1.25-77
+default-jdk-headless	2:1.25-77
+default-jre	2:1.25-77
+default-jre-headless	2:1.25-77
+openjdk-11-jdk:amd64	11.0.31+11-1
+openjdk-11-jdk-headless:amd64	11.0.31+11-1
+openjdk-11-jre:amd64	11.0.31+11-1
+openjdk-11-jre-headless:amd64	11.0.31+11-1
+openjdk-17-jdk:amd64	17.0.19+10-1~deb12u2
+openjdk-17-jdk-headless:amd64	17.0.19+10-1~deb12u2
+openjdk-17-jre:amd64	17.0.19+10-1~deb12u2
+openjdk-17-jre-headless:amd64	17.0.19+10-1~deb12u2
+openjdk-21-jre:amd64	21.0.12.1+1-1
+openjdk-21-jre-headless:amd64	21.0.12.1+1-1
+openjdk-25-jdk:amd64	25.0.5~7ea-1
+openjdk-25-jdk-headless:amd64	25.0.5~7ea-1
+openjdk-25-jre:amd64	25.0.5~7ea-1
+openjdk-25-jre-headless:amd64	25.0.5~7ea-1
+
+===== GRADLE =====
+/usr/bin/gradle
+openjdk version "17.0.19" 2026-04-21
+OpenJDK Runtime Environment (build 17.0.19+10-1-deb12u2-Debian)
+OpenJDK 64-Bit Server VM (build 17.0.19+10-1-deb12u2-Debian, mixed mode, sharing)
+
+------------------------------------------------------------
+Gradle 4.6
+------------------------------------------------------------
+
+Build time:   2012-12-21 00:00:00 UTC
+Revision:     none
+
+Groovy:       2.4.21
+Ant:          Apache Ant(TM) version 1.10.18 compiled on September 12 2026
+JVM:          17.0.19 (Debian 17.0.19+10-1-deb12u2-Debian)
+OS:           Linux 7.1.5+kali-amd64 amd64
+
+GRADLE_USER_HOME=/home/testuser/.gradle
+drwxr-xr-x 4 root root      4096 ‏أكت ‏ 5 ‏07:‏16 /opt/gradle
+drwxr-xr-x 5 root root      4096 ‏فبر ‏ 1  ‏1980 /opt/gradle/gradle-8.9
+-rw-r--r-- 1 root root 136114148 ‏يول ‏11  ‏2024 /opt/gradle/gradle-8.9-bin.zip
+drwxr-xr-x 3 root root      4096 ‏أكت ‏ 5 ‏07:‏11 /opt/gradle/gradle-dist
+8834 bytes	/opt/gradle/gradle-dist/gradle-8.9/bin/gradle
+8834 bytes	/opt/gradle/gradle-8.9/bin/gradle
+136114148 bytes	/opt/gradle/gradle-8.9-bin.zip
+224584249 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.14.3-all/h9bud5ffjflfoe91ghcb596uv/gradle-8.14.3-all.zip
+8817 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.14.3-all/h9bud5ffjflfoe91ghcb596uv/gradle-8.14.3/bin/gradle
+8736 bytes	/home/testuser/.gradle/wrapper/dists/gradle-9.5.0-bin/bvnork1r7n8i6kp5cnkibsc9q/gradle-9.5.0/bin/gradle
+8834 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.9-bin/edmeafn0qcsyb0j1jus3qy4ds/gradle-8.9/bin/gradle
+167597373 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.0-all/a2o1xoguejy6msdh0lk99lxza/gradle-8.0-all.zip
+8485 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.0-all/a2o1xoguejy6msdh0lk99lxza/gradle-8.0/bin/gradle
+8757 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.5-bin/5t9huq95ubn472n8rpzujfbqh/gradle-8.5/bin/gradle
+130979468 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.4-bin/1w5dpkrfk8irigvoxmyhowfim/gradle-8.4-bin.zip
+8757 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.4-bin/1w5dpkrfk8irigvoxmyhowfim/gradle-8.4/bin/gradle
+8757 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.7-bin/bhs2wmbdwecv87pi65oeuq5iu/gradle-8.7/bin/gradle
+134184980 bytes	/home/testuser/.gradle/wrapper/dists/gradle-8.7-bin/bhs2wmbdwecv87pi65oeuq5iu/gradle-8.7-bin.zip
+
+===== ANDROID SDK / BUILD TOOLS / NDK =====
+ANDROID_HOME=not-set
+ANDROID_SDK_ROOT=not-set
+--- SDK root: /home/testuser/Android/Sdk ---
+drwxrwxr-x 8 testuser testuser 4096 ‏سبت ‏28 ‏11:‏51 /home/testuser/Android/Sdk
+/home/testuser/Android/Sdk/platforms/android-35
+/home/testuser/Android/Sdk/platforms/android-35/skins
+/home/testuser/Android/Sdk/platforms/android-35/optional
+/home/testuser/Android/Sdk/platforms/android-35/templates
+/home/testuser/Android/Sdk/platforms/android-35/data
+/home/testuser/Android/Sdk/platforms/android-34
+/home/testuser/Android/Sdk/platforms/android-34/skins
+/home/testuser/Android/Sdk/platforms/android-34/optional
+/home/testuser/Android/Sdk/platforms/android-34/templates
+/home/testuser/Android/Sdk/platforms/android-34/data
+/home/testuser/Android/Sdk/build-tools/34.0.0
+/home/testuser/Android/Sdk/build-tools/34.0.0/lib
+/home/testuser/Android/Sdk/build-tools/34.0.0/renderscript
+/home/testuser/Android/Sdk/build-tools/34.0.0/lib64
+/home/testuser/Android/Sdk/build-tools/34.0.0/lld-bin
+/home/testuser/Android/Sdk/build-tools/35.0.0
+/home/testuser/Android/Sdk/build-tools/35.0.0/lib
+/home/testuser/Android/Sdk/build-tools/35.0.0/renderscript
+/home/testuser/Android/Sdk/build-tools/35.0.0/lib64
+/home/testuser/Android/Sdk/build-tools/35.0.0/lld-bin
+/home/testuser/Android/Sdk/platform-tools/lib64
+/home/testuser/Android/Sdk/cmdline-tools/cmdline-tools
+/home/testuser/Android/Sdk/cmdline-tools/cmdline-tools/lib
+/home/testuser/Android/Sdk/cmdline-tools/cmdline-tools/bin
+/home/testuser/Android/Sdk/cmdline-tools/latest
+/home/testuser/Android/Sdk/cmdline-tools/latest/lib
+/home/testuser/Android/Sdk/cmdline-tools/latest/bin
+/home/testuser/Android/Sdk/cmdline-tools/latest/cmdline-tools
+--- SDK root: /usr/lib/android-sdk ---
+drwxr-xr-x 5 root root 4096 ‏أكت ‏ 3 ‏15:‏03 /usr/lib/android-sdk
+/usr/lib/android-sdk/build-tools/debian
+--- adb ---
+/usr/bin/adb
+Android Debug Bridge version 1.0.41
+Version 34.0.5-debian
+Installed as /usr/lib/android-sdk/platform-tools/adb
+Running on Linux 7.1.5+kali-amd64 (x86_64)
+--- sdkmanager ---
+/usr/bin/sdkmanager
+25.2.0
+--- avdmanager ---
+avdmanager: command not found
+
+===== KOTLIN / BUILD UTILITIES =====
+--- kotlinc ---

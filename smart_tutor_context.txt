@@ -1,0 +1,3557 @@
+SPEAKLOCAL SMART TUTOR IMPLEMENTATION CONTEXT
+============================================================
+File inventory:
+  lib/data/lessons.dart
+  lib/main.dart
+  lib/models/lesson.dart
+  lib/screens/home_screen.dart
+  lib/screens/lesson_map_screen.dart
+  lib/screens/practice_screen.dart
+  lib/screens/profile_screen.dart
+  lib/screens/review_screen.dart
+  lib/services/learning_memory_service.dart
+  lib/services/practice_analytics_service.dart
+  lib/services/progress_service.dart
+  lib/services/speech_service.dart
+  lib/services/tts_service.dart
+  lib/theme/app_theme.dart
+  lib/widgets/stat_chip.dart
+
+
+================================================================================
+FILE: pubspec.yaml
+================================================================================
+name: speak_english
+description: SpeakLocal — learn to speak English offline, Duolingo/ELSA style.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_tts: ^4.2.0
+  speech_to_text: ^7.0.0
+  shared_preferences: ^2.3.3
+  google_fonts: ^6.2.1
+  provider: ^6.1.2
+  percent_indicator: ^4.2.3
+  confetti: ^0.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+
+================================================================================
+FILE: lib/main.dart
+================================================================================
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
+import 'screens/home_screen.dart';
+import 'services/learning_memory_service.dart';
+import 'services/progress_service.dart';
+import 'theme/app_theme.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+  ]);
+
+  // Load existing lesson progress without changing its stored data.
+  final progress = ProgressService();
+  await progress.load();
+
+  // Load vocabulary and correction memory separately from lesson progress.
+  final learningMemory = LearningMemoryService();
+  await learningMemory.load();
+
+  runApp(
+    SpeakLocalApp(
+      progress: progress,
+      learningMemory: learningMemory,
+    ),
+  );
+}
+
+class SpeakLocalApp extends StatelessWidget {
+  final ProgressService progress;
+  final LearningMemoryService learningMemory;
+
+  const SpeakLocalApp({
+    super.key,
+    required this.progress,
+    required this.learningMemory,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<ProgressService>.value(value: progress),
+        ChangeNotifierProvider<LearningMemoryService>.value(
+          value: learningMemory,
+        ),
+      ],
+      child: MaterialApp(
+        title: 'SpeakLocal',
+        debugShowCheckedModeBanner: false,
+        theme: buildAppTheme(),
+        home: const HomeScreen(),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/screens/practice_screen.dart
+================================================================================
+import 'package:confetti/confetti.dart';
+import 'package:speak_english/services/practice_analytics_service.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../data/lessons.dart';
+import '../models/lesson.dart';
+import '../services/progress_service.dart';
+import '../services/learning_memory_service.dart';
+import '../services/speech_service.dart';
+import '../services/tts_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/stat_chip.dart';
+
+class PracticeScreen extends StatefulWidget {
+  final String lessonId;
+
+  const PracticeScreen({super.key, required this.lessonId});
+
+  @override
+  State<PracticeScreen> createState() => _PracticeScreenState();
+}
+
+class _PracticeScreenState extends State<PracticeScreen> {
+  final _tts = TtsService();
+  final _speech = SpeechService();
+  final _confetti = ConfettiController(duration: const Duration(seconds: 2));
+
+  late Lesson lesson;
+  int index = 0;
+  String heard = '';
+  int? lastScore;
+  String? lastFeedback;
+  String? selectedChoice;
+  bool listening = false;
+  bool busy = false;
+  bool finished = false;
+  final List<int> scores = [];
+  final Set<String> _savedPhraseKeys = {};
+  final Set<String> _savedCorrectionKeys = {};
+  bool speechReady = false;
+
+  Exercise get current => lesson.exercises[index];
+
+  @override
+  void initState() {
+    super.initState();
+    lesson = findLesson(widget.lessonId)!;
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    await _tts.init();
+    speechReady = await _speech.init();
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _tts.dispose();
+    _speech.cancel();
+    _confetti.dispose();
+    super.dispose();
+  }
+
+  Future<void> _listenModel() async {
+    setState(() => busy = true);
+    await _tts.speak(current.phrase.text);
+    if (mounted) setState(() => busy = false);
+  }
+
+  Future<void> _toggleMic() async {
+    if (listening) {
+      await _speech.stop();
+      if (!mounted) return;
+      setState(() => listening = false);
+      await _evaluate();
+      return;
+    }
+
+    if (!speechReady) {
+      speechReady = await _speech.init();
+      if (!mounted) return;
+      if (!speechReady) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Speech recognition unavailable. Enable Google voice typing / English speech pack.',
+            ),
+          ),
+        );
+        return;
+      }
+    }
+
+    if (current.type == ExerciseType.chooseAndSay && selectedChoice == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pick the correct phrase first.')),
+      );
+      return;
+    }
+
+    setState(() {
+      listening = true;
+      heard = '';
+      lastScore = null;
+      lastFeedback = null;
+    });
+
+    await _speech.start(
+      onResult: (words, conf) {
+        if (!mounted) return;
+        setState(() => heard = words);
+      },
+    );
+  }
+
+  // Evaluate the answer and save useful learning items for later review.
+  Future<void> _evaluate() async {
+    final phrase = current.phrase;
+    final target = current.type == ExerciseType.chooseAndSay
+        ? (selectedChoice ?? phrase.text)
+        : phrase.text;
+
+    final memory = context.read<LearningMemoryService>();
+
+    // Save each lesson phrase once per screen session.
+    final phraseKey = '${lesson.id}:$index';
+    if (_savedPhraseKeys.add(phraseKey)) {
+      await memory.recordVocabulary(
+        word: phrase.text,
+        translation: phrase.meaningAr,
+        example: phrase.tip.isEmpty
+            ? phrase.text
+            : '${phrase.text}\nTip: ${phrase.tip}',
+      );
+    }
+
+    // Save only corrections confirmed by the lesson's answer key.
+    if (current.type == ExerciseType.chooseAndSay &&
+        selectedChoice != phrase.text) {
+      if (!mounted) return;
+
+      setState(() {
+        lastScore = 20;
+        lastFeedback = 'Wrong choice — pick the natural phrase.';
+      });
+      scores.add(20);
+
+      await memory.recordCorrection(
+        original: selectedChoice ?? '',
+        corrected: phrase.text,
+        explanation: 'This lesson marked the selected phrase as incorrect. '
+            'Choose the phrase that matches the lesson.',
+        example: '${phrase.meaningAr} — ${phrase.text}',
+      );
+
+      if (mounted) {
+        await context.read<ProgressService>().loseHeart();
+      }
+      return;
+    }
+
+    final score = PronunciationScorer.score(target, heard);
+    if (!mounted) return;
+
+    setState(() {
+      lastScore = score;
+      lastFeedback = PronunciationScorer.feedback(score);
+    });
+    scores.add(score);
+
+// Persist this evaluated exercise attempt for progress analytics.
+// This score reflects the app's existing evaluation, not acoustic analysis.
+    await PracticeAnalyticsService().recordAttempt(
+      lessonId: lesson.id,
+      prompt: target,
+      target: target,
+      score: score,
+      exerciseType: 'practice',
+    );
+
+    // Save low-scoring speech transcripts for targeted future review.
+    // This compares recognized words; it is not acoustic pronunciation analysis.
+    if (score < 75 && heard.trim().isNotEmpty) {
+      final correctionKey = '${lesson.id}:$index:${heard.trim().toLowerCase()}';
+
+      if (_savedCorrectionKeys.add(correctionKey)) {
+        await memory.recordCorrection(
+          original: heard.trim(),
+          corrected: target,
+          explanation:
+              'The recognized words did not closely match the target phrase.',
+          example: '${phrase.meaningAr} — $target',
+        );
+      }
+    }
+
+    // The screen may have been disposed while an awaited save was running.
+    if (!mounted) return;
+
+    if (score < 45) {
+      await context.read<ProgressService>().loseHeart();
+    }
+  }
+
+  Future<void> _next() async {
+    if (lastScore == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Speak the phrase before continuing.')),
+      );
+      return;
+    }
+
+    if (index < lesson.exercises.length - 1) {
+      setState(() {
+        index += 1;
+        heard = '';
+        lastScore = null;
+        lastFeedback = null;
+        selectedChoice = null;
+        listening = false;
+      });
+      return;
+    }
+
+    final avg = scores.isEmpty
+        ? 0
+        : (scores.reduce((a, b) => a + b) / scores.length).round();
+    final xp =
+        ((lesson.xpReward * (avg / 100)).round()).clamp(5, lesson.xpReward);
+    await context.read<ProgressService>().addPracticeResult(
+          lessonId: lesson.id,
+          averageScore: avg,
+          earnedXp: xp,
+        );
+    _confetti.play();
+    setState(() => finished = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Color(lesson.color.argb);
+    final step = (index + 1) / lesson.exercises.length;
+
+    if (finished) {
+      return _ResultView(
+        lesson: lesson,
+        scores: scores,
+        confetti: _confetti,
+        onDone: () => Navigator.of(context).pop(),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(lesson.title),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Center(
+              child: StatChip(
+                icon: Icons.favorite_rounded,
+                value: '${context.watch<ProgressService>().hearts}',
+                color: AppColors.red,
+              ),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          child: Column(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: step,
+                  minHeight: 12,
+                  backgroundColor: AppColors.line,
+                  color: color,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Phrase ${index + 1} of ${lesson.exercises.length}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.muted,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(22),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(28),
+                          border: Border.all(
+                              color: color.withOpacity(0.3), width: 2),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              _typeLabel(current.type),
+                              style: TextStyle(
+                                color: color,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            Text(
+                              current.phrase.text,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                                height: 1.25,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              current.phrase.meaningAr,
+                              textAlign: TextAlign.center,
+                              textDirection: TextDirection.rtl,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                            if (current.phrase.tip.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                'Tip: ${current.phrase.tip}',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: color,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (current.type == ExerciseType.chooseAndSay) ...[
+                        const SizedBox(height: 16),
+                        ...?current.choices?.map((c) {
+                          final selected = selectedChoice == c;
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: InkWell(
+                              onTap: () => setState(() => selectedChoice = c),
+                              borderRadius: BorderRadius.circular(16),
+                              child: Ink(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: selected ? color : AppColors.line,
+                                    width: 2.5,
+                                  ),
+                                  color: selected
+                                      ? color.withOpacity(0.12)
+                                      : Colors.white,
+                                ),
+                                child: Text(
+                                  c,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
+                      const SizedBox(height: 18),
+                      if (heard.isNotEmpty)
+                        Text(
+                          'You said: “$heard”',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                      if (lastScore != null) ...[
+                        const SizedBox(height: 12),
+                        _ScoreBadge(score: lastScore!),
+                        const SizedBox(height: 8),
+                        Text(
+                          lastFeedback ?? '',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.ink,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              SoftButton(
+                label: busy ? 'Playing…' : 'Listen',
+                icon: Icons.volume_up_rounded,
+                color: AppColors.blue,
+                dark: AppColors.blueDark,
+                onPressed: busy ? null : _listenModel,
+              ),
+              const SizedBox(height: 10),
+              SoftButton(
+                label: listening ? 'Stop & score' : 'Hold speak / tap mic',
+                icon: listening ? Icons.stop_rounded : Icons.mic_rounded,
+                color: listening ? AppColors.red : color,
+                dark: listening
+                    ? const Color(0xFFD13333)
+                    : Color.lerp(color, Colors.black, 0.2)!,
+                onPressed: busy ? null : _toggleMic,
+              ),
+              const SizedBox(height: 10),
+              SoftButton(
+                label: index == lesson.exercises.length - 1
+                    ? 'Finish lesson'
+                    : 'Next phrase',
+                icon: Icons.arrow_forward_rounded,
+                outlined: true,
+                onPressed: lastScore == null ? null : _next,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _typeLabel(ExerciseType type) {
+    switch (type) {
+      case ExerciseType.listenRepeat:
+        return 'LISTEN & REPEAT';
+      case ExerciseType.speakPrompt:
+        return 'SPEAK THIS';
+      case ExerciseType.chooseAndSay:
+        return 'CHOOSE & SAY';
+    }
+  }
+}
+
+class _ScoreBadge extends StatelessWidget {
+  final int score;
+  const _ScoreBadge({required this.score});
+
+  Color get color {
+    if (score >= 80) return AppColors.green;
+    if (score >= 55) return AppColors.orange;
+    return AppColors.red;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color, width: 2),
+      ),
+      child: Text(
+        'Pronunciation $score%',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w900,
+          fontSize: 18,
+        ),
+      ),
+    );
+  }
+}
+
+class _ResultView extends StatelessWidget {
+  final Lesson lesson;
+  final List<int> scores;
+  final ConfettiController confetti;
+  final VoidCallback onDone;
+
+  const _ResultView({
+    required this.lesson,
+    required this.scores,
+    required this.confetti,
+    required this.onDone,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final avg = scores.isEmpty
+        ? 0
+        : (scores.reduce((a, b) => a + b) / scores.length).round();
+    final xp =
+        ((lesson.xpReward * (avg / 100)).round()).clamp(5, lesson.xpReward);
+
+    return Scaffold(
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  const Spacer(),
+                  const Text('🎉', style: TextStyle(fontSize: 64)),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Lesson complete!',
+                    style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    lesson.title,
+                    style:
+                        const TextStyle(color: AppColors.muted, fontSize: 16),
+                  ),
+                  const SizedBox(height: 28),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _StatBox(
+                          label: 'AVG SCORE',
+                          value: '$avg%',
+                          color: AppColors.green,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _StatBox(
+                          label: 'XP EARNED',
+                          value: '+$xp',
+                          color: AppColors.orange,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  SoftButton(
+                    label: 'Continue',
+                    icon: Icons.check_rounded,
+                    onPressed: onDone,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.topCenter,
+            child: ConfettiWidget(
+              confettiController: confetti,
+              blastDirectionality: BlastDirectionality.explosive,
+              shouldLoop: false,
+              colors: const [
+                AppColors.green,
+                AppColors.blue,
+                AppColors.orange,
+                AppColors.purple,
+                AppColors.yellow,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBox extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _StatBox({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.line, width: 2),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              color: AppColors.muted,
+              fontSize: 12,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 28,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/screens/review_screen.dart
+================================================================================
+// SpeakLocal: local vocabulary and correction review.
+// All review data is stored by LearningMemoryService on this device.
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../services/learning_memory_service.dart';
+import '../services/practice_analytics_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/stat_chip.dart';
+
+class ReviewScreen extends StatefulWidget {
+  const ReviewScreen({super.key});
+
+  @override
+  State<ReviewScreen> createState() => _ReviewScreenState();
+}
+
+class _ReviewScreenState extends State<ReviewScreen> {
+  // Load saved practice analytics once when the review screen is created.
+  late final PracticeAnalyticsService _analytics;
+  late final Future<void> _analyticsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _analytics = PracticeAnalyticsService();
+    _analytics.addListener(_onAnalyticsChanged);
+    _analyticsFuture = _analytics.load();
+  }
+
+  void _onAnalyticsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _analytics.removeListener(_onAnalyticsChanged);
+    _analytics.dispose();
+    super.dispose();
+  }
+
+  // 0 = all items, 1 = vocabulary, 2 = corrections.
+  int _filter = 0;
+  int _index = 0;
+  bool _revealed = false;
+
+  // Hide successfully reviewed cards for this screen session only.
+  // The vocabulary remains saved and can return when it is due again.
+  final Set<String> _reviewedThisSession = <String>{};
+
+  // Rank weak practice phrases first without changing saved review dates.
+  List<LearningMemoryItem> _filteredItems(
+    LearningMemoryService memory,
+  ) {
+    final weakPrompts = _analytics.summary.weakPrompts
+        .map((prompt) => prompt.trim().toLowerCase())
+        .where((prompt) => prompt.isNotEmpty)
+        .toSet();
+
+    bool isWeak(LearningMemoryItem item) {
+      final original = item.original.trim().toLowerCase();
+      final corrected = item.corrected.trim().toLowerCase();
+      return weakPrompts.contains(original) || weakPrompts.contains(corrected);
+    }
+
+    final now = DateTime.now();
+    final items = memory.items
+        .where((item) => !_reviewedThisSession.contains(item.id))
+        .where((item) {
+      if (_filter == 1) {
+        return item.kind == LearningMemoryKind.vocabulary;
+      }
+      if (_filter == 2) {
+        return item.kind == LearningMemoryKind.correction;
+      }
+      return true;
+    }).toList();
+
+    // Sort by: overdue first, weak practice matches next, then oldest due date.
+    items.sort((a, b) {
+      final aDue = !a.nextReviewAt.isAfter(now);
+      final bDue = !b.nextReviewAt.isAfter(now);
+
+      if (aDue != bDue) return aDue ? -1 : 1;
+
+      final aWeak = isWeak(a);
+      final bWeak = isWeak(b);
+      if (aWeak != bWeak) return aWeak ? -1 : 1;
+
+      if (aDue && bDue) {
+        return a.nextReviewAt.compareTo(b.nextReviewAt);
+      }
+
+      return b.createdAt.compareTo(a.createdAt);
+    });
+
+    return items;
+  }
+
+  Future<void> _review(
+    LearningMemoryService memory,
+    LearningMemoryItem item,
+    int quality,
+  ) async {
+    // A due item moves behind the remaining due items after review.
+    // Keep the index in place so the next due item is not skipped.
+    final wasDue = !item.nextReviewAt.isAfter(DateTime.now());
+
+    await memory.markReviewed(itemId: item.id, quality: quality);
+
+    if (!mounted) return;
+
+    setState(() {
+      if (quality >= 3) {
+        _reviewedThisSession.add(item.id);
+      } else if (!wasDue) {
+        _index++;
+      }
+      _revealed = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          quality < 3
+              ? 'Saved. This item will return for review soon.'
+              : 'Review saved. Keep up the good work!',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final memory = context.watch<LearningMemoryService>();
+    final items = _filteredItems(memory);
+    final dueCount = memory.dueItems.length;
+
+    // Keep the selected index valid when items or filters change.
+    final safeIndex = items.isEmpty ? 0 : _index % items.length;
+    final item = items.isEmpty ? null : items[safeIndex];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Learning review',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFFE7F8EE), Color(0xFFD3F0E0)],
+              ),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: AppColors.green.withOpacity(0.35)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Little steps, lasting progress',
+                  style: TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Practise saved words and corrections. '
+                  'Your review history stays on this device.',
+                  style: TextStyle(height: 1.4, color: AppColors.ink),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: StatChip(
+                        icon: Icons.library_books_rounded,
+                        value: '${memory.items.length} saved',
+                        color: AppColors.greenDark,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: StatChip(
+                        icon: Icons.schedule_rounded,
+                        value: '$dueCount due',
+                        color: AppColors.orange,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 22),
+
+          // Practice analytics are shown separately from saved vocabulary.
+          FutureBuilder<void>(
+            future: _analyticsFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: LinearProgressIndicator(),
+                  ),
+                );
+              }
+
+              final summary = _analytics.summary;
+              return Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0F4FF),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppColors.line),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.insights_rounded,
+                            color: AppColors.greenDark),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Practice insights',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _analyticsMetric(
+                            'Attempts',
+                            '${summary.totalAttempts}',
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _analyticsMetric(
+                            'Average score',
+                            summary.totalAttempts == 0
+                                ? '—'
+                                : '${summary.averageScore.round()}%',
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Phrases to practise',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 6),
+                    if (summary.weakPrompts.isEmpty)
+                      Text(
+                        summary.totalAttempts == 0
+                            ? 'Complete a practice exercise to start building your insights.'
+                            : 'No weak phrases detected yet. Keep practising!',
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          height: 1.4,
+                        ),
+                      )
+                    else
+                      ...summary.weakPrompts.take(5).map(
+                            (prompt) => Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(
+                                    Icons.replay_rounded,
+                                    size: 18,
+                                    color: AppColors.orange,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(child: Text(prompt)),
+                                ],
+                              ),
+                            ),
+                          ),
+                  ],
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 22),
+          const Text(
+            'Choose a collection',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _filterChip('All', 0),
+              _filterChip('Vocabulary', 1),
+              _filterChip('Corrections', 2),
+            ],
+          ),
+          const SizedBox(height: 20),
+          if (item == null)
+            _emptyState(memory)
+          else ...[
+            Text(
+              'CARD ${(safeIndex + 1)} OF ${items.length}',
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: AppColors.line),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x10000000),
+                    blurRadius: 12,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        item.kind == LearningMemoryKind.vocabulary
+                            ? Icons.translate_rounded
+                            : Icons.edit_note_rounded,
+                        color: AppColors.greenDark,
+                        size: 25,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        item.kind == LearningMemoryKind.vocabulary
+                            ? 'VOCABULARY'
+                            : 'CORRECTION',
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Try to remember:',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    item.kind == LearningMemoryKind.vocabulary
+                        ? item.original
+                        : item.original,
+                    style: const TextStyle(
+                      fontSize: 25,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    item.kind == LearningMemoryKind.vocabulary
+                        ? 'What does this word mean?'
+                        : 'How would you say this correctly?',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 15,
+                    ),
+                  ),
+                  if (_revealed) ...[
+                    const Divider(height: 30),
+                    const Text(
+                      'ANSWER',
+                      style: TextStyle(
+                        color: AppColors.greenDark,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      item.kind == LearningMemoryKind.vocabulary
+                          ? (item.explanation.isNotEmpty
+                              ? item.explanation
+                              : item.corrected)
+                          : item.corrected,
+                      style: const TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    if (item.explanation.isNotEmpty &&
+                        item.kind == LearningMemoryKind.correction) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        item.explanation,
+                        style: const TextStyle(
+                          height: 1.45,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ],
+                    if (item.example.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Example',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        item.example,
+                        style: const TextStyle(
+                          height: 1.4,
+                          color: AppColors.muted,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    const Text(
+                      'How well did you remember?',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 12),
+                    SoftButton(
+                      label: 'Need more practice',
+                      icon: Icons.refresh_rounded,
+                      color: AppColors.red,
+                      dark: const Color(0xFFD13333),
+                      onPressed: () => _review(memory, item, 1),
+                    ),
+                    const SizedBox(height: 10),
+                    SoftButton(
+                      label: 'Remembered',
+                      icon: Icons.check_circle_outline_rounded,
+                      onPressed: () => _review(memory, item, 3),
+                    ),
+                    const SizedBox(height: 10),
+                    SoftButton(
+                      label: 'Easy',
+                      icon: Icons.bolt_rounded,
+                      color: AppColors.yellow,
+                      dark: AppColors.orange,
+                      onPressed: () => _review(memory, item, 5),
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 22),
+                    SoftButton(
+                      label: 'Reveal answer',
+                      icon: Icons.visibility_rounded,
+                      onPressed: () => setState(() => _revealed = true),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Seen ${item.occurrences} time(s) · '
+              'Successful uses: ${item.successfulUses}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 14),
+            TextButton.icon(
+              onPressed: () => setState(() {
+                _index = (_index + 1) % items.length;
+                _revealed = false;
+              }),
+              icon: const Icon(Icons.skip_next_rounded),
+              label: const Text('Skip for now'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip(String label, int value) {
+    final selected = _filter == value;
+
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => setState(() {
+        _filter = value;
+        _index = 0;
+        _revealed = false;
+      }),
+    );
+  }
+
+  Widget _emptyState(LearningMemoryService memory) {
+    final onlyWords = _filter == 1;
+    final onlyCorrections = _filter == 2;
+
+    final title = onlyWords
+        ? 'No saved vocabulary yet'
+        : onlyCorrections
+            ? 'No saved corrections yet'
+            : 'Your review deck is ready';
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.auto_stories_rounded,
+            size: 48,
+            color: AppColors.greenDark,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            memory.items.isEmpty
+                ? 'Saved words and corrections will appear here. '
+                    'The current lessons do not automatically populate '
+                    'this collection yet.'
+                : 'Try another collection to see your saved learning items.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              height: 1.45,
+              color: AppColors.muted,
+            ),
+          ),
+          if (memory.items.isEmpty) ...[
+            const SizedBox(height: 16),
+            const Text(
+              'Your existing lesson progress is separate and has not been reset.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _analyticsMetric(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 23,
+              fontWeight: FontWeight.w900,
+              color: AppColors.greenDark,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/services/practice_analytics_service.dart
+================================================================================
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// A persisted record of one learning attempt.
+///
+/// The score measures the app's existing exercise evaluation. It must not be
+/// interpreted as a clinical or acoustic measurement of pronunciation.
+@immutable
+class PracticeAttempt {
+  const PracticeAttempt({
+    required this.lessonId,
+    required this.prompt,
+    required this.target,
+    required this.score,
+    required this.createdAt,
+    required this.exerciseType,
+  });
+
+  final String lessonId;
+  final String prompt;
+  final String target;
+  final int score;
+  final DateTime createdAt;
+  final String exerciseType;
+
+  Map<String, Object?> toJson() => {
+        'lessonId': lessonId,
+        'prompt': prompt,
+        'target': target,
+        'score': score,
+        'createdAt': createdAt.toUtc().toIso8601String(),
+        'exerciseType': exerciseType,
+      };
+
+  factory PracticeAttempt.fromJson(Map<String, dynamic> json) {
+    final rawScore = json['score'];
+    final parsedScore = rawScore is num ? rawScore.toInt() : 0;
+
+    return PracticeAttempt(
+      lessonId: json['lessonId'] as String? ?? '',
+      prompt: json['prompt'] as String? ?? '',
+      target: json['target'] as String? ?? '',
+      score: parsedScore.clamp(0, 100),
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      exerciseType: json['exerciseType'] as String? ?? 'unknown',
+    );
+  }
+}
+
+/// Summary calculated from saved attempts rather than guessed from XP.
+@immutable
+class PracticeAnalyticsSummary {
+  const PracticeAnalyticsSummary({
+    required this.totalAttempts,
+    required this.averageScore,
+    required this.weakPrompts,
+    required this.recentAttempts,
+  });
+
+  final int totalAttempts;
+  final double averageScore;
+  final List<String> weakPrompts;
+  final List<PracticeAttempt> recentAttempts;
+}
+
+/// Stores exercise history separately from the existing progress and memory
+/// keys, so adding analytics never overwrites the user's current progress.
+class PracticeAnalyticsService extends ChangeNotifier {
+  PracticeAnalyticsService({SharedPreferences? preferences})
+      : _preferences = preferences;
+
+  static const storageKey = 'speaklocal_practice_attempts_v1';
+  static const int maxStoredAttempts = 2000;
+
+  SharedPreferences? _preferences;
+  final List<PracticeAttempt> _attempts = [];
+  bool _loaded = false;
+
+  List<PracticeAttempt> get attempts => List.unmodifiable(_attempts);
+  bool get isLoaded => _loaded;
+
+  Future<void> load() async {
+    _preferences ??= await SharedPreferences.getInstance();
+    final raw = _preferences!.getString(storageKey);
+    _attempts.clear();
+
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          for (final entry in decoded) {
+            if (entry is Map<String, dynamic>) {
+              _attempts.add(PracticeAttempt.fromJson(entry));
+            } else if (entry is Map) {
+              _attempts.add(
+                PracticeAttempt.fromJson(Map<String, dynamic>.from(entry)),
+              );
+            }
+          }
+        }
+      } on FormatException {
+        // Preserve app availability if this new analytics key is malformed.
+        // Do not clear or modify any other saved user data.
+        _attempts.clear();
+      }
+    }
+
+    _attempts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _loaded = true;
+    notifyListeners();
+  }
+
+  Future<void> recordAttempt({
+    required String lessonId,
+    required String prompt,
+    required String target,
+    required int score,
+    required String exerciseType,
+    DateTime? createdAt,
+  }) async {
+    if (!_loaded) await load();
+
+    final normalizedScore = score.clamp(0, 100);
+    _attempts.insert(
+      0,
+      PracticeAttempt(
+        lessonId: lessonId,
+        prompt: prompt.trim(),
+        target: target.trim(),
+        score: normalizedScore,
+        createdAt: (createdAt ?? DateTime.now()).toUtc(),
+        exerciseType: exerciseType,
+      ),
+    );
+
+    if (_attempts.length > maxStoredAttempts) {
+      _attempts.removeRange(maxStoredAttempts, _attempts.length);
+    }
+
+    await _persist();
+    notifyListeners();
+  }
+
+  PracticeAnalyticsSummary get summary {
+    if (_attempts.isEmpty) {
+      return const PracticeAnalyticsSummary(
+        totalAttempts: 0,
+        averageScore: 0,
+        weakPrompts: [],
+        recentAttempts: [],
+      );
+    }
+
+    final total = _attempts.fold<int>(0, (sum, item) => sum + item.score);
+    final byPrompt = <String, List<int>>{};
+
+    for (final attempt in _attempts) {
+      final key = '${attempt.lessonId}::${attempt.prompt.toLowerCase()}';
+      byPrompt.putIfAbsent(key, () => []).add(attempt.score);
+    }
+
+    final weak = byPrompt.entries
+        .map((entry) {
+          final average =
+              entry.value.reduce((a, b) => a + b) / entry.value.length;
+          return (prompt: entry.key.split('::').last, average: average);
+        })
+        .where((item) => item.average < 70)
+        .toList()
+      ..sort((a, b) => a.average.compareTo(b.average));
+
+    return PracticeAnalyticsSummary(
+      totalAttempts: _attempts.length,
+      averageScore: total / _attempts.length,
+      weakPrompts: List.unmodifiable(weak.map((item) => item.prompt).toSet()),
+      recentAttempts: List.unmodifiable(_attempts.take(10)),
+    );
+  }
+
+  Future<void> _persist() async {
+    final preferences = _preferences ??= await SharedPreferences.getInstance();
+    await preferences.setString(
+      storageKey,
+      jsonEncode(_attempts.map((attempt) => attempt.toJson()).toList()),
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/services/learning_memory_service.dart
+================================================================================
+// Local learning memory for SpeakLocal.
+//
+// Stores vocabulary and language corrections independently from lesson progress.
+// Data stays on this device and survives app restarts.
+// A future AI conversation service can call these methods to save learning items.
+
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+enum LearningMemoryKind {
+  vocabulary,
+  correction,
+}
+
+class LearningMemoryItem {
+  final String id;
+  final LearningMemoryKind kind;
+  final String original;
+  final String corrected;
+  final String explanation;
+  final String example;
+  final int occurrences;
+  final int successfulUses;
+  final int reviewIntervalDays;
+  final int correctReviewStreak;
+  final DateTime createdAt;
+  final DateTime? lastReviewedAt;
+  final DateTime nextReviewAt;
+
+  const LearningMemoryItem({
+    required this.id,
+    required this.kind,
+    required this.original,
+    required this.corrected,
+    required this.explanation,
+    required this.example,
+    required this.occurrences,
+    required this.successfulUses,
+    required this.reviewIntervalDays,
+    required this.correctReviewStreak,
+    required this.createdAt,
+    required this.lastReviewedAt,
+    required this.nextReviewAt,
+  });
+
+  factory LearningMemoryItem.fromJson(Map<String, dynamic> json) {
+    return LearningMemoryItem(
+      id: json['id'] as String,
+      kind: LearningMemoryKind.values.firstWhere(
+        (value) => value.name == json['kind'],
+        orElse: () => LearningMemoryKind.vocabulary,
+      ),
+      original: json['original'] as String? ?? '',
+      corrected: json['corrected'] as String? ?? '',
+      explanation: json['explanation'] as String? ?? '',
+      example: json['example'] as String? ?? '',
+      occurrences: (json['occurrences'] as num?)?.toInt() ?? 1,
+      successfulUses: (json['successfulUses'] as num?)?.toInt() ?? 0,
+      reviewIntervalDays:
+          (json['reviewIntervalDays'] as num?)?.toInt() ?? 0,
+      correctReviewStreak:
+          (json['correctReviewStreak'] as num?)?.toInt() ?? 0,
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
+      lastReviewedAt:
+          DateTime.tryParse(json['lastReviewedAt'] as String? ?? ''),
+      nextReviewAt:
+          DateTime.tryParse(json['nextReviewAt'] as String? ?? '') ??
+              DateTime.now(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'kind': kind.name,
+        'original': original,
+        'corrected': corrected,
+        'explanation': explanation,
+        'example': example,
+        'occurrences': occurrences,
+        'successfulUses': successfulUses,
+        'reviewIntervalDays': reviewIntervalDays,
+        'correctReviewStreak': correctReviewStreak,
+        'createdAt': createdAt.toIso8601String(),
+        'lastReviewedAt': lastReviewedAt?.toIso8601String(),
+        'nextReviewAt': nextReviewAt.toIso8601String(),
+      };
+
+  LearningMemoryItem copyWith({
+    String? original,
+    String? corrected,
+    String? explanation,
+    String? example,
+    int? occurrences,
+    int? successfulUses,
+    int? reviewIntervalDays,
+    int? correctReviewStreak,
+    DateTime? lastReviewedAt,
+    DateTime? nextReviewAt,
+  }) {
+    return LearningMemoryItem(
+      id: id,
+      kind: kind,
+      original: original ?? this.original,
+      corrected: corrected ?? this.corrected,
+      explanation: explanation ?? this.explanation,
+      example: example ?? this.example,
+      occurrences: occurrences ?? this.occurrences,
+      successfulUses: successfulUses ?? this.successfulUses,
+      reviewIntervalDays:
+          reviewIntervalDays ?? this.reviewIntervalDays,
+      correctReviewStreak:
+          correctReviewStreak ?? this.correctReviewStreak,
+      createdAt: createdAt,
+      lastReviewedAt: lastReviewedAt ?? this.lastReviewedAt,
+      nextReviewAt: nextReviewAt ?? this.nextReviewAt,
+    );
+  }
+}
+
+class LearningMemoryService extends ChangeNotifier {
+  static const String _storageKey = 'speaklocal_learning_memory_v1';
+
+  final Map<String, LearningMemoryItem> _items = {};
+  bool _loaded = false;
+
+  bool get isLoaded => _loaded;
+
+  List<LearningMemoryItem> get items {
+    final result = _items.values.toList();
+    result.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return List.unmodifiable(result);
+  }
+
+  List<LearningMemoryItem> get vocabulary => items
+      .where((item) => item.kind == LearningMemoryKind.vocabulary)
+      .toList();
+
+  List<LearningMemoryItem> get corrections => items
+      .where((item) => item.kind == LearningMemoryKind.correction)
+      .toList();
+
+  List<LearningMemoryItem> get dueItems {
+    final now = DateTime.now();
+    final result = _items.values
+        .where((item) => !item.nextReviewAt.isAfter(now))
+        .toList();
+    result.sort((a, b) => a.nextReviewAt.compareTo(b.nextReviewAt));
+    return result;
+  }
+
+  Future<void> load() async {
+    if (_loaded) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storageKey);
+
+    if (raw != null) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          for (final entry in decoded) {
+            if (entry is Map<String, dynamic>) {
+              final item = LearningMemoryItem.fromJson(entry);
+              _items[item.id] = item;
+            } else if (entry is Map) {
+              final item = LearningMemoryItem.fromJson(
+                Map<String, dynamic>.from(entry),
+              );
+              _items[item.id] = item;
+            }
+          }
+        }
+      } on FormatException {
+        // Keep the app usable if the stored learning-memory JSON is damaged.
+        // Do not delete or overwrite the raw value automatically.
+      }
+    }
+
+    _loaded = true;
+    notifyListeners();
+  }
+
+  Future<void> recordVocabulary({
+    required String word,
+    String translation = '',
+    String example = '',
+  }) async {
+    final value = word.trim();
+    if (value.isEmpty) return;
+
+    final existing = _find(
+      kind: LearningMemoryKind.vocabulary,
+      original: value,
+    );
+
+    if (existing != null) {
+      _items[existing.id] = existing.copyWith(
+        occurrences: existing.occurrences + 1,
+        explanation:
+            translation.trim().isEmpty ? null : translation.trim(),
+        example: example.trim().isEmpty ? null : example.trim(),
+      );
+    } else {
+      final now = DateTime.now();
+      final item = LearningMemoryItem(
+        id: 'v_${now.microsecondsSinceEpoch}',
+        kind: LearningMemoryKind.vocabulary,
+        original: value,
+        corrected: value,
+        explanation: translation.trim(),
+        example: example.trim(),
+        occurrences: 1,
+        successfulUses: 0,
+        reviewIntervalDays: 0,
+        correctReviewStreak: 0,
+        createdAt: now,
+        lastReviewedAt: null,
+        nextReviewAt: now,
+      );
+      _items[item.id] = item;
+    }
+
+    await _persist();
+  }
+
+  Future<void> recordCorrection({
+    required String original,
+    required String corrected,
+    String explanation = '',
+    String example = '',
+  }) async {
+    final wrong = original.trim();
+    final right = corrected.trim();
+    if (wrong.isEmpty || right.isEmpty) return;
+
+    final existing = _find(
+      kind: LearningMemoryKind.correction,
+      original: wrong,
+      corrected: right,
+    );
+
+    if (existing != null) {
+      _items[existing.id] = existing.copyWith(
+        occurrences: existing.occurrences + 1,
+        explanation:
+            explanation.trim().isEmpty ? null : explanation.trim(),
+        example: example.trim().isEmpty ? null : example.trim(),
+      );
+    } else {
+      final now = DateTime.now();
+      final item = LearningMemoryItem(
+        id: 'c_${now.microsecondsSinceEpoch}',
+        kind: LearningMemoryKind.correction,
+        original: wrong,
+        corrected: right,
+        explanation: explanation.trim(),
+        example: example.trim(),
+        occurrences: 1,
+        successfulUses: 0,
+        reviewIntervalDays: 0,
+        correctReviewStreak: 0,
+        createdAt: now,
+        lastReviewedAt: null,
+        nextReviewAt: now,
+      );
+      _items[item.id] = item;
+    }
+
+    await _persist();
+  }
+
+  // Call this when the learner independently uses a saved correction correctly.
+  Future<void> recordSuccessfulUse(String itemId) async {
+    final item = _items[itemId];
+    if (item == null) return;
+
+    _items[itemId] = item.copyWith(
+      successfulUses: item.successfulUses + 1,
+    );
+    await _persist();
+  }
+
+  // Quality scale: 0 = forgot completely, 5 = remembered easily.
+  // Repeated successful reviews gradually increase the interval.
+  Future<void> markReviewed({
+    required String itemId,
+    required int quality,
+  }) async {
+    final item = _items[itemId];
+    if (item == null) return;
+
+    final score = quality.clamp(0, 5);
+    final int interval;
+    final int streak;
+
+    if (score < 3) {
+      interval = 1;
+      streak = 0;
+    } else {
+      interval = item.reviewIntervalDays == 0
+          ? 1
+          : score == 3
+              ? item.reviewIntervalDays
+              : item.reviewIntervalDays * 2;
+      streak = item.correctReviewStreak + 1;
+    }
+
+    final now = DateTime.now();
+    _items[itemId] = item.copyWith(
+      reviewIntervalDays: interval,
+      correctReviewStreak: streak,
+      lastReviewedAt: now,
+      nextReviewAt: now.add(Duration(days: interval)),
+    );
+
+    await _persist();
+  }
+
+  LearningMemoryItem? _find({
+    required LearningMemoryKind kind,
+    required String original,
+    String? corrected,
+  }) {
+    final normalizedOriginal = _normalize(original);
+    final normalizedCorrected =
+        corrected == null ? null : _normalize(corrected);
+
+    for (final item in _items.values) {
+      if (item.kind != kind ||
+          _normalize(item.original) != normalizedOriginal) {
+        continue;
+      }
+
+      if (normalizedCorrected != null &&
+          _normalize(item.corrected) != normalizedCorrected) {
+        continue;
+      }
+
+      return item;
+    }
+    return null;
+  }
+
+  String _normalize(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _storageKey,
+      jsonEncode(_items.values.map((item) => item.toJson()).toList()),
+    );
+    notifyListeners();
+  }
+}
+
+
+================================================================================
+FILE: lib/services/speech_service.dart
+================================================================================
+import 'dart:async';
+
+import 'package:speech_to_text/speech_to_text.dart';
+
+/// Handles speech recognition while preserving the transcript across sessions.
+/// Bluetooth input depends on Android's active route and recognizer support.
+class SpeechService {
+  final SpeechToText _speech = SpeechToText();
+
+  bool available = false;
+  String lastWords = '';
+  double confidence = 0;
+
+  bool _keepListening = false;
+  bool _starting = false;
+  bool _disposed = false;
+  bool _restartPending = false;
+
+  Timer? _restartTimer;
+  String _partialWords = '';
+  final List<String> _completedSegments = [];
+  void Function(String words, double confidence)? _onResult;
+
+  Future<bool> init() async {
+    if (available) return true;
+
+    available = await _speech.initialize(
+      onError: (_) {
+        // Status events may follow an error. Restart only while recording
+        // remains enabled by the user.
+      },
+      onStatus: _onStatus,
+    );
+
+    return available;
+  }
+
+  bool get isListening => _keepListening || _starting || _speech.isListening;
+
+  Future<void> start({
+    required void Function(String words, double confidence) onResult,
+  }) async {
+    if (!available) {
+      await init();
+    }
+    if (!available) return;
+
+    lastWords = '';
+    confidence = 0;
+
+    await _speech.listen(
+      onResult: (result) {
+        lastWords = result.recognizedWords;
+        confidence = result.confidence > 0 ? result.confidence : confidence;
+        onResult(lastWords, confidence);
+      },
+      listenOptions: SpeechListenOptions(
+        listenMode: ListenMode.dictation,
+        cancelOnError: false,
+        partialResults: true,
+        localeId: 'en_US',
+        listenFor: const Duration(minutes: 5),
+        pauseFor: const Duration(seconds: 25),
+      ),
+    );
+  }
+
+  Future<void> _startSession() async {
+    if (_disposed || !_keepListening || _starting) return;
+    if (_speech.isListening) return;
+
+    _starting = true;
+
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          if (_disposed || !_keepListening) return;
+
+          final words = result.recognizedWords.trim();
+
+          if (result.finalResult) {
+            // Avoid appending the same final segment more than once.
+            if (words.isNotEmpty &&
+                (_completedSegments.isEmpty ||
+                    _completedSegments.last != words)) {
+              _completedSegments.add(words);
+            }
+            _partialWords = '';
+          } else {
+            _partialWords = words;
+          }
+
+          lastWords = [
+            ..._completedSegments,
+            if (_partialWords.isNotEmpty) _partialWords,
+          ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+          if (result.confidence > 0) {
+            confidence = result.confidence;
+          }
+
+          _onResult?.call(lastWords, confidence);
+        },
+        listenOptions: SpeechListenOptions(
+          listenMode: ListenMode.dictation,
+          cancelOnError: false,
+          partialResults: true,
+          localeId: 'en_US',
+          listenFor: const Duration(minutes: 5),
+          pauseFor: const Duration(seconds: 25),
+        ),
+      );
+    } catch (_) {
+      _scheduleRestart();
+    } finally {
+      _starting = false;
+    }
+  }
+
+  void _onStatus(String status) {
+    if (_disposed || !_keepListening) return;
+
+    final normalized = status.toLowerCase();
+    if (normalized == 'done' || normalized == 'notlistening') {
+      _scheduleRestart();
+    }
+  }
+
+  void _scheduleRestart() {
+    if (_disposed || !_keepListening || _restartPending) return;
+
+    _restartPending = true;
+    _restartTimer?.cancel();
+
+    _restartTimer = Timer(const Duration(milliseconds: 700), () async {
+      _restartPending = false;
+
+      if (_disposed || !_keepListening) return;
+
+      await _startSession();
+    });
+  }
+
+  Future<void> stop() async {
+    // Turn off restart first, because Android may emit "done" after stop().
+    _keepListening = false;
+    _restartTimer?.cancel();
+    _restartPending = false;
+
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
+
+    lastWords = [
+      ..._completedSegments,
+      if (_partialWords.isNotEmpty) _partialWords,
+    ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    _onResult?.call(lastWords, confidence);
+  }
+
+  Future<void> cancel() async {
+    _keepListening = false;
+    _restartTimer?.cancel();
+    _restartPending = false;
+
+    _completedSegments.clear();
+    _partialWords = '';
+    lastWords = '';
+    _onResult = null;
+
+    if (_speech.isListening) {
+      await _speech.cancel();
+    }
+  }
+
+  void dispose() {
+    _disposed = true;
+    _keepListening = false;
+    _restartTimer?.cancel();
+    _speech.cancel();
+  }
+}
+
+/// Estimates transcript similarity; it does not measure pronunciation acoustics.
+class PronunciationScorer {
+  static int score(String target, String spoken) {
+    final a = _normalize(target);
+    final b = _normalize(spoken);
+
+    if (a.isEmpty || b.isEmpty) return 0;
+    if (a == b) return 100;
+
+    final aw = a.split(' ').where((w) => w.isNotEmpty).toList();
+    final bw = b.split(' ').where((w) => w.isNotEmpty).toList();
+
+    if (aw.isEmpty || bw.isEmpty) return 0;
+
+    final wordDistance = _wordLevenshtein(aw, bw);
+    final maxWords = aw.length > bw.length ? aw.length : bw.length;
+    final wordSimilarity = 1 - wordDistance / maxWords;
+    final characterSimilarity = _similarity(a, b);
+
+    return ((wordSimilarity * 0.75 + characterSimilarity * 0.25) * 100)
+        .round()
+        .clamp(0, 100);
+  }
+
+  static String feedback(int score) {
+    if (score >= 90) {
+      return 'Excellent! The recognized words closely match the target.';
+    }
+    if (score >= 75) {
+      return 'Great job! The recognized words mostly match.';
+    }
+    if (score >= 55) {
+      return 'Good try — listen again and speak a little more slowly.';
+    }
+    if (score >= 35) {
+      return 'Keep going — listen to the model, then try again.';
+    }
+    return 'Try once more. Tap Listen first, then speak clearly.';
+  }
+
+  static String _normalize(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('’', "'")
+        .replaceAll(RegExp(r'\bcan not\b'), 'cannot')
+        .replaceAll(RegExp(r'\bgonna\b'), 'going to')
+        .replaceAll(RegExp(r'\bwanna\b'), 'want to')
+        .replaceAll(RegExp(r"[^a-z0-9\s']"), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static double _similarity(String a, String b) {
+    if (a == b) return 1;
+    if (a.isEmpty || b.isEmpty) return 0;
+
+    final distance = _levenshtein(a, b);
+    final maxLength = a.length > b.length ? a.length : b.length;
+
+    return 1 - distance / maxLength;
+  }
+
+  static int _wordLevenshtein(List<String> a, List<String> b) {
+    final dp = List.generate(
+      a.length + 1,
+      (_) => List<int>.filled(b.length + 1, 0),
+    );
+
+    for (var i = 0; i <= a.length; i++) {
+      dp[i][0] = i;
+    }
+    for (var j = 0; j <= b.length; j++) {
+      dp[0][j] = j;
+    }
+
+    for (var i = 1; i <= a.length; i++) {
+      for (var j = 1; j <= b.length; j++) {
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+
+        dp[i][j] = [
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + cost,
+        ].reduce((x, y) => x < y ? x : y);
+      }
+    }
+
+    return dp[a.length][b.length];
+  }
+
+  static int _levenshtein(String a, String b) {
+    final dp = List.generate(
+      a.length + 1,
+      (_) => List<int>.filled(b.length + 1, 0),
+    );
+
+    for (var i = 0; i <= a.length; i++) {
+      dp[i][0] = i;
+    }
+    for (var j = 0; j <= b.length; j++) {
+      dp[0][j] = j;
+    }
+
+    for (var i = 1; i <= a.length; i++) {
+      for (var j = 1; j <= b.length; j++) {
+        final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+
+        dp[i][j] = [
+          dp[i - 1][j] + 1,
+          dp[i][j - 1] + 1,
+          dp[i - 1][j - 1] + cost,
+        ].reduce((x, y) => x < y ? x : y);
+      }
+    }
+
+    return dp[a.length][b.length];
+  }
+}
+
+
+================================================================================
+FILE: lib/services/tts_service.dart
+================================================================================
+import 'package:flutter_tts/flutter_tts.dart';
+
+class TtsService {
+  final FlutterTts _tts = FlutterTts();
+  bool _ready = false;
+
+  Future<void> init() async {
+    if (_ready) return;
+    await _tts.setLanguage('en-US');
+    await _tts.setSpeechRate(0.42);
+    await _tts.setVolume(1.0);
+    await _tts.setPitch(1.0);
+    await _tts.awaitSpeakCompletion(true);
+    _ready = true;
+  }
+
+  Future<void> speak(String text) async {
+    await init();
+    await _tts.stop();
+    await _tts.speak(text);
+  }
+
+  Future<void> stop() => _tts.stop();
+
+  void dispose() {
+    _tts.stop();
+  }
+}
+
+
+================================================================================
+FILE: lib/screens/home_screen.dart
+================================================================================
+import 'package:flutter/material.dart';
+import 'package:percent_indicator/circular_percent_indicator.dart';
+import 'package:provider/provider.dart';
+
+import '../data/lessons.dart';
+import '../services/progress_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/stat_chip.dart';
+import 'lesson_map_screen.dart';
+import 'profile_screen.dart';
+import 'practice_screen.dart';
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _tab = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = [
+      const _LearnTab(),
+      const LessonMapScreen(),
+      const ProfileScreen(),
+    ];
+
+    return Scaffold(
+      body: SafeArea(child: pages[_tab]),
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: AppColors.line, width: 2)),
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _tab,
+          onTap: (i) => setState(() => _tab = i),
+          selectedItemColor: AppColors.green,
+          unselectedItemColor: AppColors.muted,
+          selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800),
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_rounded),
+              label: 'Learn',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.map_rounded),
+              label: 'Path',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.person_rounded),
+              label: 'Profile',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LearnTab extends StatelessWidget {
+  const _LearnTab();
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = context.watch<ProgressService>();
+    final lessons = allLessons();
+    final next = lessons.firstWhere(
+      (l) => !progress.isCompleted(l.id) && progress.isLessonUnlocked(l.id),
+      orElse: () => lessons.last,
+    );
+    final goalPct = (progress.dailyXp / progress.dailyGoal).clamp(0.0, 1.0);
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      children: [
+        Row(
+          children: [
+            const Text(
+              'SpeakLocal',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w900,
+                color: AppColors.green,
+              ),
+            ),
+            const Spacer(),
+            StatChip(
+              icon: Icons.local_fire_department_rounded,
+              value: '${progress.streak}',
+              color: AppColors.orange,
+            ),
+            const SizedBox(width: 8),
+            StatChip(
+              icon: Icons.bolt_rounded,
+              value: '${progress.xp}',
+              color: AppColors.yellow,
+            ),
+            const SizedBox(width: 8),
+            StatChip(
+              icon: Icons.favorite_rounded,
+              value: '${progress.hearts}',
+              color: AppColors.red,
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Speak English every day — fully on your phone.',
+          style: TextStyle(color: AppColors.muted.withOpacity(0.95)),
+        ),
+        const SizedBox(height: 22),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFE8FFF0), Color(0xFFD7FFB8)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.greenSoft, width: 2),
+          ),
+          child: Row(
+            children: [
+              CircularPercentIndicator(
+                radius: 42,
+                lineWidth: 9,
+                percent: goalPct,
+                animation: true,
+                circularStrokeCap: CircularStrokeCap.round,
+                progressColor: AppColors.green,
+                backgroundColor: Colors.white,
+                center: Text(
+                  '${(goalPct * 100).round()}%',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Daily speaking goal',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${progress.dailyXp} / ${progress.dailyGoal} XP today',
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      progress.dailyGoalMet
+                          ? 'Goal complete — amazing!'
+                          : 'A few phrases keep your streak alive.',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.greenDark,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Text(
+          'Continue speaking',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 12),
+        _NextLessonCard(
+          emoji: next.emoji,
+          title: next.title,
+          subtitle: next.subtitle,
+          color: Color(next.color.argb),
+          onStart: () {
+            if (progress.hearts <= 0) {
+              _showNoHearts(context);
+              return;
+            }
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => PracticeScreen(lessonId: next.id),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 24),
+        const Text(
+          'How it works',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 12),
+        const _TipTile(
+          icon: Icons.hearing_rounded,
+          title: 'Listen',
+          body: 'Hear natural English on your device TTS.',
+          color: AppColors.blue,
+        ),
+        const _TipTile(
+          icon: Icons.mic_rounded,
+          title: 'Speak',
+          body: 'Repeat into the mic — like ELSA Speak drills.',
+          color: AppColors.green,
+        ),
+        const _TipTile(
+          icon: Icons.insights_rounded,
+          title: 'Score',
+          body: 'Local pronunciation score + XP, no account needed.',
+          color: AppColors.purple,
+        ),
+      ],
+    );
+  }
+
+  void _showNoHearts(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Out of hearts'),
+        content: const Text(
+          'Take a short break, then refill hearts from Profile to keep practicing.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NextLessonCard extends StatelessWidget {
+  final String emoji;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onStart;
+
+  const _NextLessonCard({
+    required this.emoji,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onStart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.line, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Text(emoji, style: const TextStyle(fontSize: 28)),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                      ),
+                    ),
+                    Text(subtitle, style: const TextStyle(color: AppColors.muted)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SoftButton(
+            label: 'Start lesson',
+            icon: Icons.play_arrow_rounded,
+            color: color,
+            dark: Color.lerp(color, Colors.black, 0.2)!,
+            onPressed: onStart,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TipTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String body;
+  final Color color;
+
+  const _TipTile({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: AppColors.line, width: 2),
+        ),
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.15),
+          child: Icon(icon, color: color),
+        ),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+        subtitle: Text(body),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/screens/lesson_map_screen.dart
+================================================================================
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../data/lessons.dart';
+import '../models/lesson.dart';
+import '../services/progress_service.dart';
+import '../theme/app_theme.dart';
+import 'practice_screen.dart';
+
+class LessonMapScreen extends StatelessWidget {
+  const LessonMapScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = context.watch<ProgressService>();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      children: [
+        const Text(
+          'Learning path',
+          style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${progress.completedCount()} / ${allLessons().length} lessons cleared',
+          style: const TextStyle(color: AppColors.muted),
+        ),
+        const SizedBox(height: 18),
+        ...curriculum.map((unit) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.sky.withOpacity(0.55),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: AppColors.blue.withOpacity(0.25)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      unit.title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                        color: AppColors.blueDark,
+                      ),
+                    ),
+                    Text(
+                      unit.description,
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              ...unit.lessons.asMap().entries.map((entry) {
+                final i = entry.key;
+                final lesson = entry.value;
+                final unlocked = progress.isLessonUnlocked(lesson.id);
+                final done = progress.isCompleted(lesson.id);
+                final best = progress.bestScores[lesson.id];
+                return _PathNode(
+                  lesson: lesson,
+                  index: i + 1,
+                  unlocked: unlocked,
+                  done: done,
+                  best: best,
+                  onTap: () {
+                    if (!unlocked) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Finish the previous lesson first.'),
+                        ),
+                      );
+                      return;
+                    }
+                    if (progress.hearts <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('No hearts left. Refill in Profile.'),
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => PracticeScreen(lessonId: lesson.id),
+                      ),
+                    );
+                  },
+                );
+              }),
+              const SizedBox(height: 18),
+            ],
+          );
+        }),
+      ],
+    );
+  }
+}
+
+class _PathNode extends StatelessWidget {
+  final Lesson lesson;
+  final int index;
+  final bool unlocked;
+  final bool done;
+  final int? best;
+  final VoidCallback onTap;
+
+  const _PathNode({
+    required this.lesson,
+    required this.index,
+    required this.unlocked,
+    required this.done,
+    required this.best,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Color(lesson.color.argb);
+    final alignRight = index.isEven;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: alignRight ? 48 : 0,
+        right: alignRight ? 0 : 48,
+        bottom: 14,
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(22),
+        child: Ink(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: unlocked ? Colors.white : const Color(0xFFF3F3F3),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: done
+                  ? color
+                  : (unlocked ? AppColors.line : const Color(0xFFD8D8D8)),
+              width: 2.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: unlocked
+                      ? color.withOpacity(0.18)
+                      : const Color(0xFFE0E0E0),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: unlocked ? color : const Color(0xFFBDBDBD),
+                    width: 3,
+                  ),
+                ),
+                child: Text(
+                  unlocked ? lesson.emoji : '🔒',
+                  style: const TextStyle(fontSize: 22),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lesson.title,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: unlocked ? AppColors.ink : AppColors.muted,
+                      ),
+                    ),
+                    Text(
+                      lesson.subtitle,
+                      style: const TextStyle(color: AppColors.muted, fontSize: 13),
+                    ),
+                    if (best != null)
+                      Text(
+                        'Best score $best% · +${lesson.xpReward} XP',
+                        style: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Icon(
+                done
+                    ? Icons.check_circle_rounded
+                    : (unlocked
+                        ? Icons.play_circle_fill_rounded
+                        : Icons.lock_rounded),
+                color: done
+                    ? AppColors.green
+                    : (unlocked ? color : AppColors.muted),
+                size: 30,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/screens/profile_screen.dart
+================================================================================
+import 'package:flutter/material.dart';
+import 'package:percent_indicator/linear_percent_indicator.dart';
+import 'package:provider/provider.dart';
+
+import '../data/lessons.dart';
+import 'review_screen.dart';
+import '../services/learning_memory_service.dart';
+import '../services/progress_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/stat_chip.dart';
+
+class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = context.watch<ProgressService>();
+    final pct = progress.overallProgress();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      children: [
+        const Text(
+          'Your profile',
+          style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFFF6D8), Color(0xFFFFE8A3)],
+            ),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.yellow.withOpacity(0.5)),
+          ),
+          child: Column(
+            children: [
+              const CircleAvatar(
+                radius: 40,
+                backgroundColor: Colors.white,
+                child: Text('🦉', style: TextStyle(fontSize: 40)),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Local Learner',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Offline English speaking coach',
+                style: TextStyle(color: AppColors.muted),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  StatChip(
+                    icon: Icons.bolt_rounded,
+                    value: '${progress.xp} XP',
+                    color: AppColors.orange,
+                  ),
+                  StatChip(
+                    icon: Icons.local_fire_department_rounded,
+                    value: '${progress.streak} day',
+                    color: AppColors.red,
+                  ),
+                  StatChip(
+                    icon: Icons.favorite_rounded,
+                    value: '${progress.hearts}',
+                    color: AppColors.red,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 22),
+        const Text(
+          'Course progress',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 10),
+        LinearPercentIndicator(
+          lineHeight: 16,
+          percent: pct,
+          animation: true,
+          barRadius: const Radius.circular(12),
+          progressColor: AppColors.green,
+          backgroundColor: AppColors.line,
+          padding: EdgeInsets.zero,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '${progress.completedCount()} of ${allLessons().length} lessons · ${(pct * 100).round()}%',
+          style: const TextStyle(color: AppColors.muted),
+        ),
+        const SizedBox(height: 18),
+        Consumer<LearningMemoryService>(
+          builder: (context, memory, child) => SoftButton(
+            label: 'Review words & corrections (${memory.items.length})',
+            icon: Icons.auto_stories_rounded,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const ReviewScreen(),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 24),
+        const SizedBox(height: 24),
+        SoftButton(
+          label: 'Refill hearts',
+          icon: Icons.favorite_rounded,
+          color: AppColors.red,
+          dark: const Color(0xFFD13333),
+          onPressed: () async {
+            await context.read<ProgressService>().refillHearts();
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Hearts refilled to 5')),
+              );
+            }
+          },
+        ),
+        const SizedBox(height: 12),
+        SoftButton(
+          label: 'Reset progress',
+          outlined: true,
+          onPressed: () async {
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Reset everything?'),
+                content: const Text(
+                  'XP, streak, and completed lessons will be cleared on this device.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Reset'),
+                  ),
+                ],
+              ),
+            );
+            if (ok == true && context.mounted) {
+              await context.read<ProgressService>().resetAll();
+            }
+          },
+        ),
+        const SizedBox(height: 28),
+        const Text(
+          'About SpeakLocal',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'SpeakLocal is a Duolingo / ELSA-inspired speaking trainer that runs '
+          'locally on your Android phone. Lessons, XP, and scores stay on device. '
+          'Speech recognition uses your phone’s English recognizer; text-to-speech '
+          'uses the built-in voice engine.',
+          style: TextStyle(height: 1.45, color: AppColors.muted),
+        ),
+      ],
+    );
+  }
+}
+
+
+================================================================================
+FILE: lib/services/progress_service.dart
+================================================================================
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../data/lessons.dart';
+
+class ProgressService extends ChangeNotifier {
+  static const _key = 'speaklocal_progress_v1';
+
+  int xp = 0;
+  int streak = 0;
+  int hearts = 5;
+  int dailyGoal = 50;
+  int dailyXp = 0;
+  String? lastPracticeDate;
+  Set<String> completedLessons = {};
+  Map<String, int> bestScores = {};
+
+  bool get dailyGoalMet => dailyXp >= dailyGoal;
+
+  Future<void> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_key);
+    if (raw == null) {
+      notifyListeners();
+      return;
+    }
+    final map = jsonDecode(raw) as Map<String, dynamic>;
+    xp = map['xp'] as int? ?? 0;
+    streak = map['streak'] as int? ?? 0;
+    hearts = map['hearts'] as int? ?? 5;
+    dailyGoal = map['dailyGoal'] as int? ?? 50;
+    dailyXp = map['dailyXp'] as int? ?? 0;
+    lastPracticeDate = map['lastPracticeDate'] as String?;
+    completedLessons = Set<String>.from(
+      (map['completedLessons'] as List?)?.cast<String>() ?? [],
+    );
+    final rawScores = map['bestScores'];
+    if (rawScores is Map) {
+      bestScores = {
+        for (final e in rawScores.entries)
+          e.key.toString(): (e.value as num).toInt(),
+      };
+    } else {
+      bestScores = {};
+    }
+    _rollDailyIfNeeded();
+    notifyListeners();
+  }
+
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _key,
+      jsonEncode({
+        'xp': xp,
+        'streak': streak,
+        'hearts': hearts,
+        'dailyGoal': dailyGoal,
+        'dailyXp': dailyXp,
+        'lastPracticeDate': lastPracticeDate,
+        'completedLessons': completedLessons.toList(),
+        'bestScores': bestScores,
+      }),
+    );
+  }
+
+  String _today() {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
+
+  void _rollDailyIfNeeded() {
+    final today = _today();
+    if (lastPracticeDate == null) return;
+    if (lastPracticeDate == today) return;
+
+    final last = DateTime.tryParse(lastPracticeDate!);
+    final now = DateTime.now();
+    if (last != null) {
+      final gap = DateTime(now.year, now.month, now.day)
+          .difference(DateTime(last.year, last.month, last.day))
+          .inDays;
+      if (gap > 1) streak = 0;
+    }
+    dailyXp = 0;
+  }
+
+  bool isLessonUnlocked(String lessonId) {
+    final lessons = allLessons();
+    final index = lessons.indexWhere((l) => l.id == lessonId);
+    if (index <= 0) return true;
+    return completedLessons.contains(lessons[index - 1].id);
+  }
+
+  bool isCompleted(String lessonId) => completedLessons.contains(lessonId);
+
+  Future<void> addPracticeResult({
+    required String lessonId,
+    required int averageScore,
+    required int earnedXp,
+  }) async {
+    _rollDailyIfNeeded();
+    final today = _today();
+    if (lastPracticeDate != today) {
+      if (lastPracticeDate != null) {
+        final last = DateTime.tryParse(lastPracticeDate!);
+        final now = DateTime.now();
+        if (last != null) {
+          final gap = DateTime(now.year, now.month, now.day)
+              .difference(DateTime(last.year, last.month, last.day))
+              .inDays;
+          if (gap == 1) {
+            streak += 1;
+          } else if (gap > 1) {
+            streak = 1;
+          }
+        } else {
+          streak = 1;
+        }
+      } else {
+        streak = 1;
+      }
+      lastPracticeDate = today;
+    }
+
+    xp += earnedXp;
+    dailyXp += earnedXp;
+    final prev = bestScores[lessonId] ?? 0;
+    if (averageScore > prev) bestScores[lessonId] = averageScore;
+    if (averageScore >= 55) {
+      completedLessons.add(lessonId);
+    }
+    notifyListeners();
+    await _save();
+  }
+
+  Future<void> loseHeart() async {
+    if (hearts > 0) hearts -= 1;
+    notifyListeners();
+    await _save();
+  }
+
+  Future<void> refillHearts() async {
+    hearts = 5;
+    notifyListeners();
+    await _save();
+  }
+
+  Future<void> resetAll() async {
+    xp = 0;
+    streak = 0;
+    hearts = 5;
+    dailyXp = 0;
+    lastPracticeDate = null;
+    completedLessons.clear();
+    bestScores.clear();
+    notifyListeners();
+    await _save();
+  }
+
+  int completedCount() => completedLessons.length;
+
+  double overallProgress() {
+    final total = allLessons().length;
+    if (total == 0) return 0;
+    return completedLessons.length / total;
+  }
+}
+
+
+================================================================================
+FILE: lib/widgets/stat_chip.dart
+================================================================================
+import 'package:flutter/material.dart';
+
+import '../theme/app_theme.dart';
+
+class StatChip extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final Color color;
+
+  const StatChip({
+    super.key,
+    required this.icon,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 6),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: color,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SoftButton extends StatelessWidget {
+  final String label;
+  final VoidCallback? onPressed;
+  final Color color;
+  final Color dark;
+  final IconData? icon;
+  final bool outlined;
+
+  const SoftButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.color = AppColors.green,
+    this.dark = AppColors.greenDark,
+    this.icon,
+    this.outlined = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    return GestureDetector(
+      onTap: onPressed,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        height: 54,
+        decoration: BoxDecoration(
+          color: outlined
+              ? Colors.white
+              : (enabled ? color : AppColors.line),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: outlined
+                ? AppColors.line
+                : (enabled ? dark : const Color(0xFFCFCFCF)),
+            width: 2,
+          ),
+          boxShadow: enabled && !outlined
+              ? [
+                  BoxShadow(
+                    color: dark,
+                    offset: const Offset(0, 4),
+                    blurRadius: 0,
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null) ...[
+              Icon(
+                icon,
+                color: outlined ? AppColors.ink : Colors.white,
+              ),
+              const SizedBox(width: 8),
+            ],
+            Text(
+              label.toUpperCase(),
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.8,
+                color: outlined
+                    ? AppColors.ink
+                    : (enabled ? Colors.white : AppColors.muted),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+================================================================================
+FILE: test/learning_services_test.dart
+================================================================================
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speak_english/services/learning_memory_service.dart';
+import 'package:speak_english/services/progress_service.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  group('ProgressService', () {
+    test('saves and restores lesson progress', () async {
+      final first = ProgressService();
+      await first.load();
+
+      await first.addPracticeResult(
+        lessonId: 'test_lesson',
+        averageScore: 80,
+        earnedXp: 25,
+      );
+
+      final restored = ProgressService();
+      await restored.load();
+
+      expect(restored.xp, 25);
+      expect(restored.dailyXp, 25);
+      expect(restored.hearts, 5);
+      expect(restored.isCompleted('test_lesson'), isTrue);
+      expect(restored.bestScores['test_lesson'], 80);
+    });
+
+    test('does not complete a lesson below the passing score', () async {
+      final progress = ProgressService();
+      await progress.load();
+
+      await progress.addPracticeResult(
+        lessonId: 'low_score_lesson',
+        averageScore: 54,
+        earnedXp: 10,
+      );
+
+      expect(progress.isCompleted('low_score_lesson'), isFalse);
+      expect(progress.bestScores['low_score_lesson'], 54);
+    });
+  });
+
+  group('LearningMemoryService', () {
+    test('merges repeated vocabulary regardless of case and spacing', () async {
+      final memory = LearningMemoryService();
+      await memory.load();
+
+      await memory.recordVocabulary(
+        word: '  Good   morning ',
+        translation: 'صباح الخير',
+      );
+      await memory.recordVocabulary(word: 'good morning');
+
+      expect(memory.vocabulary, hasLength(1));
+      expect(memory.vocabulary.single.occurrences, 2);
+    });
+
+    test('stores corrections separately from vocabulary', () async {
+      final memory = LearningMemoryService();
+      await memory.load();
+
+      await memory.recordVocabulary(word: 'went');
+      await memory.recordCorrection(
+        original: 'I goed',
+        corrected: 'I went',
+      );
+
+      expect(memory.vocabulary, hasLength(1));
+      expect(memory.corrections, hasLength(1));
+      expect(memory.items, hasLength(2));
+    });
+
+    test('reviewing an item schedules it for the future', () async {
+      final memory = LearningMemoryService();
+      await memory.load();
+      await memory.recordVocabulary(word: 'carefully');
+
+      final item = memory.vocabulary.single;
+      expect(memory.dueItems.any((entry) => entry.id == item.id), isTrue);
+
+      await memory.markReviewed(itemId: item.id, quality: 5);
+
+      expect(memory.dueItems.any((entry) => entry.id == item.id), isFalse);
+      expect(memory.vocabulary.single.reviewIntervalDays, 1);
+      expect(memory.vocabulary.single.correctReviewStreak, 1);
+    });
+
+    test('restores saved learning memory after reload', () async {
+      final first = LearningMemoryService();
+      await first.load();
+      await first.recordCorrection(
+        original: 'She go',
+        corrected: 'She goes',
+      );
+
+      final restored = LearningMemoryService();
+      await restored.load();
+
+      expect(restored.corrections, hasLength(1));
+      expect(restored.corrections.single.original, 'She go');
+      expect(restored.corrections.single.corrected, 'She goes');
+    });
+  });
+}
+
+
+================================================================================
+FILE: test/practice_analytics_service_test.dart
+================================================================================
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speak_english/services/practice_analytics_service.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  test('starts with an empty, zero-score summary', () async {
+    final service = PracticeAnalyticsService();
+    await service.load();
+
+    expect(service.summary.totalAttempts, 0);
+    expect(service.summary.averageScore, 0);
+    expect(service.summary.weakPrompts, isEmpty);
+  });
+
+  test('persists attempts and reloads them in newest-first order', () async {
+    final service = PracticeAnalyticsService();
+    await service.load();
+
+    await service.recordAttempt(
+      lessonId: 'lesson-1',
+      prompt: 'First phrase',
+      target: 'Hello there',
+      score: 80,
+      exerciseType: 'speakPrompt',
+      createdAt: DateTime.utc(2026, 1, 1),
+    );
+    await service.recordAttempt(
+      lessonId: 'lesson-1',
+      prompt: 'Second phrase',
+      target: 'How are you?',
+      score: 40,
+      exerciseType: 'listenRepeat',
+      createdAt: DateTime.utc(2026, 1, 2),
+    );
+
+    final reloaded = PracticeAnalyticsService();
+    await reloaded.load();
+
+    expect(reloaded.attempts, hasLength(2));
+    expect(reloaded.attempts.first.prompt, 'Second phrase');
+    expect(reloaded.attempts.last.prompt, 'First phrase');
+    expect(reloaded.summary.totalAttempts, 2);
+    expect(reloaded.summary.averageScore, 60);
+    expect(reloaded.summary.weakPrompts, contains('second phrase'));
+  });
+
+  test('clamps scores to the supported 0–100 range', () async {
+    final service = PracticeAnalyticsService();
+    await service.recordAttempt(
+      lessonId: 'lesson-2',
+      prompt: 'A phrase',
+      target: 'A target',
+      score: 150,
+      exerciseType: 'chooseAndSay',
+    );
+
+    expect(service.attempts.single.score, 100);
+  });
+
+  test('keeps analytics in a separate preference key', () async {
+    SharedPreferences.setMockInitialValues({
+      'speaklocal_progress_v1': '{"xp":123}',
+      'speaklocal_learning_memory_v1': '[{"id":"existing"}]',
+    });
+
+    final service = PracticeAnalyticsService();
+    await service.recordAttempt(
+      lessonId: 'lesson-3',
+      prompt: 'Test',
+      target: 'Testing',
+      score: 90,
+      exerciseType: 'speakPrompt',
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('speaklocal_progress_v1'), '{"xp":123}');
+    expect(
+      prefs.getString('speaklocal_learning_memory_v1'),
+      '[{"id":"existing"}]',
+    );
+    expect(prefs.containsKey(PracticeAnalyticsService.storageKey), isTrue);
+  });
+}
+
+
+================================================================================
+FILE: test/widget_test.dart
+================================================================================
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speak_english/main.dart';
+import 'package:speak_english/services/learning_memory_service.dart';
+import 'package:speak_english/services/progress_service.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('SpeakLocal loads home', (tester) async {
+    // Use in-memory storage instead of a platform preferences plugin.
+    SharedPreferences.setMockInitialValues({});
+
+    final progress = ProgressService();
+    await progress.load();
+
+    final learningMemory = LearningMemoryService();
+    await learningMemory.load();
+
+    await tester.pumpWidget(
+      SpeakLocalApp(
+        progress: progress,
+        learningMemory: learningMemory,
+      ),
+    );
+
+    await tester.pump();
+
+    expect(find.text('SpeakLocal'), findsOneWidget);
+  });
+}
