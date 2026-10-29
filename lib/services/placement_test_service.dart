@@ -95,9 +95,9 @@ class PlacementTestService {
     final wasCorrect = selectedIndex == question.correctIndex;
     if (wasCorrect) {
       _correct++;
-      _difficulty = (_difficulty + 1).clamp(1, 5);
+      _difficulty = (_difficulty + 1).clamp(1, 5).toInt();
     } else {
-      _difficulty = (_difficulty - 1).clamp(1, 5);
+      _difficulty = (_difficulty - 1).clamp(1, 5).toInt();
     }
     return wasCorrect;
   }
@@ -107,7 +107,8 @@ class PlacementTestService {
     final estimated = _answered == 0
         ? 1
         : ((_difficulty + ((_correct / _answered) >= 0.75 ? 1 : 0))
-            .clamp(1, 5));
+            .clamp(1, 5)
+            .toInt());
     const labels = {
       1: 'Beginner',
       2: 'Elementary',
