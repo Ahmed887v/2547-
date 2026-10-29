@@ -114,6 +114,8 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
       });
       final item = _current;
       if (item != null) {
+        if (score < 70) _weakPrompts.add(item.prompt.toLowerCase());
+        else _weakPrompts.remove(item.prompt.toLowerCase());
         await PracticeAnalyticsService().recordAttempt(
           lessonId: 'smart_tutor',
           prompt: item.prompt,
@@ -184,6 +186,11 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
     if (_selected != null || _current == null) return;
     final right = choice == _current!.answer;
     final item = _current!;
+    if (right) {
+      _weakPrompts.remove(item.prompt.toLowerCase());
+    } else {
+      _weakPrompts.add(item.prompt.toLowerCase());
+    }
     setState(() {
       _selected = choice;
       _showMeaning = true;
