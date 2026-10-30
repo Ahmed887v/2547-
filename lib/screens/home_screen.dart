@@ -260,17 +260,19 @@ class _LearnTab extends StatelessWidget {
             ),
           ),
           icon: const Icon(Icons.school_rounded, color: AppColors.green),
-          label: const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Find your English level',
-                    style: TextStyle(fontWeight: FontWeight.w900)),
-                SizedBox(height: 4),
-                Text('A short adaptive test that works offline',
-                    style: TextStyle(color: AppColors.muted, fontSize: 12)),
-              ],
-            ),
+          label: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Find your English level',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'A short adaptive test that works offline',
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+            ],
           ),
         ),
         OutlinedButton.icon(
