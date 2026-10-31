@@ -39,6 +39,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
   final Set<String> _savedPhraseKeys = {};
   final Set<String> _savedCorrectionKeys = {};
   bool speechReady = false;
+  bool _isDisposing = false;
 
   Exercise get current => lesson.exercises[index];
 
@@ -57,6 +58,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
 
   @override
   void dispose() {
+    _isDisposing = true;
     _tts.dispose();
     _speech.cancel();
     _confetti.dispose();
@@ -109,7 +111,7 @@ class _PracticeScreenState extends State<PracticeScreen> {
 
     await _speech.start(
       onResult: (words, conf) {
-        if (!mounted) return;
+        if (_isDisposing || !mounted) return;
         setState(() => heard = words);
       },
     );
