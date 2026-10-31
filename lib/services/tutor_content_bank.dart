@@ -37,10 +37,20 @@ class TutorContentBank {
     _loaded = true;
   }
 
+  String _stableId(String value) {
+    // FNV-1a keeps IDs stable across app launches and Dart runtimes.
+    var hash = 0x811c9dc5;
+    for (final unit in value.codeUnits) {
+      hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
   List<TutorContentItem> _parse(String source, TutorContentKind kind) {
     final result = <TutorContentItem>[];
     final blocks = source.split(RegExp(r'(?=^### Entry\s+\d+:)', multiLine: true));
-    for (final block in blocks) {
+    for (final rawBlock in blocks) {
+      final block = rawBlock.trimLeft();
       if (!block.startsWith('### Entry')) continue;
       String field(String label) {
         final match = RegExp(
@@ -66,7 +76,7 @@ class TutorContentBank {
       if (cleanPrompt.isEmpty || meaning.isEmpty) continue;
       final normalized = cleanPrompt.toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
       result.add(TutorContentItem(
-        id: '${kind.name}_${normalized.hashCode.toUnsigned(32).toRadixString(16)}',
+        id: '${kind.name}_${_stableId(normalized)}',
         kind: kind,
         prompt: cleanPrompt,
         meaning: meaning,
