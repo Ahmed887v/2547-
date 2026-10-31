@@ -284,7 +284,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
       });
       final item = _current;
       if (item != null) {
-        final source = _contentBank.all.where((entry) => entry.prompt == item.prompt).firstOrNull;
+        final source = _contentForPrompt(item.prompt);
         if (source != null) {
           await _learnerProfile.recordResult(
             itemId: source.id,
@@ -380,6 +380,13 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
         SnackBar(content: Text('Could not load Smart Tutor content: $error')),
       );
     }
+  }
+
+  TutorContentItem? _contentForPrompt(String prompt) {
+    for (final entry in _contentBank.all) {
+      if (entry.prompt == prompt) return entry;
+    }
+    return null;
   }
 
   String _key(_TutorItem item) => item.prompt.toLowerCase();
