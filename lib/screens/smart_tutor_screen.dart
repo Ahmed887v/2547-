@@ -8,6 +8,10 @@ import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../services/learning_memory_service.dart';
 import '../services/progress_service.dart';
+import '../models/tutor_content_item.dart';
+import '../services/tutor_content_bank.dart';
+import '../services/tutor_learner_profile.dart';
+import '../services/smart_tutor_engine.dart';
 import '../theme/app_theme.dart';
 
 /// Offline adaptive tutor. Questions are selected from a mixed bank and
@@ -230,6 +234,10 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   int _answered = 0;
   int _streak = 0;
   bool _loaded = false;
+  bool _isDisposing = false;
+  final TutorContentBank _contentBank = TutorContentBank();
+  final TutorLearnerProfile _learnerProfile = TutorLearnerProfile();
+  SmartTutorEngine? _engine;
 
   @override
   void initState() {
@@ -246,6 +254,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
 
   @override
   void dispose() {
+    _isDisposing = true;
     _tts.dispose();
     _speech.cancel();
     super.dispose();
@@ -275,6 +284,14 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
       });
       final item = _current;
       if (item != null) {
+        final source = _contentBank.all.where((entry) => entry.prompt == item.prompt).firstOrNull;
+        if (source != null) {
+          await _learnerProfile.recordResult(
+            itemId: source.id,
+            correct: score >= 70,
+            score: score,
+          );
+        }
         if (score < 70) {
           _weakPrompts.add(item.prompt.toLowerCase());
         } else {
@@ -319,7 +336,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
     });
     final started = await _speech.start(
       onResult: (words, confidence) {
-        if (mounted) setState(() => _heard = words);
+        if (!_isDisposing && mounted) setState(() => _heard = words);
       },
       onListeningChanged: (active) {
         if (!mounted) return;
@@ -337,31 +354,61 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    _seen = (prefs.getStringList(_historyKey) ?? []).toSet();
-    // Pull weak prompts from the same persisted history used by lesson review.
-    final analytics = PracticeAnalyticsService();
-    await analytics.load();
-    _weakPrompts =
-        analytics.summary.weakPrompts.map((e) => e.toLowerCase()).toSet();
-    if (!mounted) return;
-    setState(() {
-      _loaded = true;
-      _next();
-    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _seen = (prefs.getStringList(_historyKey) ?? []).toSet();
+      final analytics = PracticeAnalyticsService();
+      await analytics.load();
+      _weakPrompts =
+          analytics.summary.weakPrompts.map((e) => e.toLowerCase()).toSet();
+
+      // Load the complete bundled banks and the persistent adaptive learner profile.
+      await Future.wait([_contentBank.load(), _learnerProfile.load()]);
+      _engine = SmartTutorEngine(
+        bank: _contentBank,
+        profile: _learnerProfile,
+      );
+      if (!mounted) return;
+      setState(() {
+        _loaded = true;
+        _next();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loaded = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load Smart Tutor content: $error')),
+      );
+    }
   }
 
   String _key(_TutorItem item) => item.prompt.toLowerCase();
 
+  _TutorItem _toTutorItem(TutorContentItem source) {
+    final candidates = _contentBank.all
+        .where((entry) => entry.id != source.id)
+        .map((entry) => entry.meaning)
+        .where((meaning) => meaning.isNotEmpty && meaning != source.meaning)
+        .toSet()
+        .toList()
+      ..shuffle(_random);
+    final choices = <String>[source.meaning, ...candidates.take(3)]..shuffle(_random);
+    return _TutorItem(
+      source.prompt,
+      source.meaning,
+      source.arabicMeaning,
+      choices,
+      source.example.isNotEmpty ? source.example : 'Use “${source.prompt}” in a sentence.',
+    );
+  }
+
   void _next() {
-    final bank = [..._words, ..._expressions];
-    final weak = bank
-        .where((e) => _weakPrompts.contains(e.prompt.toLowerCase()))
-        .toList();
-    final unseen = bank.where((e) => !_seen.contains(_key(e))).toList();
-    // Revisit known weak items first; otherwise introduce unseen material.
-    final pool = weak.isNotEmpty ? weak : (unseen.isNotEmpty ? unseen : bank);
-    _current = pool[_random.nextInt(pool.length)];
+    final selected = _engine?.nextItem();
+    if (selected == null) {
+      _current = null;
+      return;
+    }
+    _current = _toTutorItem(selected);
     _selected = null;
     _showMeaning = false;
     _heard = '';
@@ -373,6 +420,14 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
     if (_selected != null || _current == null) return;
     final right = choice == _current!.answer;
     final item = _current!;
+    final source = _contentBank.all.where((entry) => entry.prompt == item.prompt).firstOrNull;
+    if (source != null) {
+      await _learnerProfile.recordResult(
+        itemId: source.id,
+        correct: right,
+        score: right ? 100 : 0,
+      );
+    }
     if (right) {
       _weakPrompts.remove(item.prompt.toLowerCase());
     } else {
