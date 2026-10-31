@@ -25,3 +25,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/content/1000_english_words.md
+    - assets/content/1000_american_slang_expressions.md
