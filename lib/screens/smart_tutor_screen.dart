@@ -360,7 +360,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
                           color: const Color(0xFFE8FFF0),
                           borderRadius: BorderRadius.circular(20)),
                       child: Text(
-                          _expressions.contains(item) ? 'SLANG' : 'VOCAB',
+                          _contentForPrompt(item.prompt)?.kind == TutorContentKind.expression ? 'SLANG' : 'VOCAB',
                           style: const TextStyle(
                               color: AppColors.greenDark,
                               fontSize: 11,
