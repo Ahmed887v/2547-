@@ -61,7 +61,7 @@ class TutorLearnerProfile extends ChangeNotifier {
     _progress[itemId] = old.copyWith(
       attempts: old.attempts + 1,
       correct: old.correct + (correct ? 1 : 0),
-      lastScore: score.clamp(0, 100),
+      lastScore: score.clamp(0, 100).toInt(),
       correctStreak: nextStreak,
       lastPracticedAt: now,
       nextReviewAt: now.add(Duration(days: interval)),
