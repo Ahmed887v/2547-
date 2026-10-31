@@ -73,7 +73,8 @@ class TutorLearnerProfile extends ChangeNotifier {
   List<String> dueItemIds([DateTime? at]) {
     final now = at ?? DateTime.now();
     return _progress.entries
-        .where((e) => e.value.nextReviewAt == null || !e.value.nextReviewAt!.isAfter(now))
+        .where((e) => e.value.attempts > 0 &&
+            (e.value.nextReviewAt == null || !e.value.nextReviewAt!.isAfter(now)))
         .map((e) => e.key).toList(growable: false);
   }
 
