@@ -2,103 +2,78 @@ import 'dart:async';
 
 import 'package:speech_to_text/speech_to_text.dart';
 
-/// Handles speech recognition while preserving the transcript across sessions.
-/// Bluetooth input depends on Android's active route and recognizer support.
+/// Owns one speech-recognition session and keeps the UI in sync with Android.
 class SpeechService {
   final SpeechToText _speech = SpeechToText();
 
   bool available = false;
+  bool _starting = false;
+  bool _sessionActive = false;
+  bool _disposed = false;
+
   String lastWords = '';
   double confidence = 0;
 
-  bool _keepListening = false;
-  bool _starting = false;
-  bool _disposed = false;
-  bool _restartPending = false;
-
-  Timer? _restartTimer;
-  String _partialWords = '';
-  final List<String> _completedSegments = [];
   void Function(String words, double confidence)? _onResult;
+  void Function(bool listening)? _onListeningChanged;
+  void Function(String message)? _onError;
 
-  Future<bool> init() async {
+  bool get isListening =>
+      !_disposed && (_starting || _sessionActive || _speech.isListening);
+
+  Future<bool> init({
+    void Function(String message)? onError,
+  }) async {
+    if (_disposed) return false;
     if (available) return true;
 
-    available = await _speech.initialize(
-      onError: (_) {
-        // Status events may follow an error. Restart only while recording
-        // remains enabled by the user.
-      },
-      onStatus: _onStatus,
-    );
-
+    try {
+      available = await _speech.initialize(
+        onStatus: _handleStatus,
+        onError: (error) {
+          _starting = false;
+          _sessionActive = false;
+          _onListeningChanged?.call(false);
+          _onError?.call(error.errorMsg);
+        },
+      );
+      if (!available) onError?.call('Speech recognition is unavailable.');
+    } catch (error) {
+      available = false;
+      onError?.call(error.toString());
+    }
     return available;
   }
 
-  bool get isListening => _keepListening || _starting || _speech.isListening;
-
-  Future<void> start({
+  Future<bool> start({
     required void Function(String words, double confidence) onResult,
+    void Function(bool listening)? onListeningChanged,
+    void Function(String message)? onError,
   }) async {
-    if (!available) {
-      await init();
-    }
-    if (!available) return;
+    if (_disposed || isListening) return false;
 
+    _onResult = onResult;
+    _onListeningChanged = onListeningChanged;
+    _onError = onError;
     lastWords = '';
     confidence = 0;
 
-    await _speech.listen(
-      onResult: (result) {
-        lastWords = result.recognizedWords;
-        confidence = result.confidence > 0 ? result.confidence : confidence;
-        onResult(lastWords, confidence);
-      },
-      listenOptions: SpeechListenOptions(
-        listenMode: ListenMode.dictation,
-        cancelOnError: false,
-        partialResults: true,
-        localeId: 'en_US',
-        listenFor: const Duration(minutes: 5),
-        pauseFor: const Duration(seconds: 25),
-      ),
-    );
-  }
-
-  Future<void> _startSession() async {
-    if (_disposed || !_keepListening || _starting) return;
-    if (_speech.isListening) return;
+    if (!available && !await init()) {
+      _onError?.call('Speech recognition is unavailable.');
+      return false;
+    }
+    if (_disposed) return false;
 
     _starting = true;
+    _sessionActive = true;
+    _onListeningChanged?.call(true);
 
     try {
       await _speech.listen(
         onResult: (result) {
-          if (_disposed || !_keepListening) return;
-
-          final words = result.recognizedWords.trim();
-
-          if (result.finalResult) {
-            // Avoid appending the same final segment more than once.
-            if (words.isNotEmpty &&
-                (_completedSegments.isEmpty ||
-                    _completedSegments.last != words)) {
-              _completedSegments.add(words);
-            }
-            _partialWords = '';
-          } else {
-            _partialWords = words;
-          }
-
-          lastWords = [
-            ..._completedSegments,
-            if (_partialWords.isNotEmpty) _partialWords,
-          ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
-
-          if (result.confidence > 0) {
-            confidence = result.confidence;
-          }
-
+          if (_disposed || !_sessionActive) return;
+          lastWords = result.recognizedWords.trim();
+          if (result.confidence > 0) confidence = result.confidence;
           _onResult?.call(lastWords, confidence);
         },
         listenOptions: SpeechListenOptions(
@@ -106,78 +81,73 @@ class SpeechService {
           cancelOnError: false,
           partialResults: true,
           localeId: 'en_US',
-          listenFor: const Duration(minutes: 5),
-          pauseFor: const Duration(seconds: 25),
+          listenFor: const Duration(minutes: 2),
+          pauseFor: const Duration(seconds: 15),
         ),
       );
-    } catch (_) {
-      _scheduleRestart();
-    } finally {
       _starting = false;
+      // Android may report a status event immediately after listen().
+      if (!_speech.isListening && _sessionActive) {
+        // Do not leave the UI falsely red if the platform rejected the session.
+        _sessionActive = false;
+        _onListeningChanged?.call(false);
+        _onError?.call(
+            'The phone did not start listening. Check microphone permission and the speech recognition service.');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      _starting = false;
+      _sessionActive = false;
+      _onListeningChanged?.call(false);
+      _onError?.call(error.toString());
+      return false;
     }
   }
 
-  void _onStatus(String status) {
-    if (_disposed || !_keepListening) return;
-
+  void _handleStatus(String status) {
+    if (_disposed) return;
     final normalized = status.toLowerCase();
     if (normalized == 'done' || normalized == 'notlistening') {
-      _scheduleRestart();
+      _starting = false;
+      if (_sessionActive) {
+        _sessionActive = false;
+        _onListeningChanged?.call(false);
+        _onResult?.call(lastWords, confidence);
+      }
     }
-  }
-
-  void _scheduleRestart() {
-    if (_disposed || !_keepListening || _restartPending) return;
-
-    _restartPending = true;
-    _restartTimer?.cancel();
-
-    _restartTimer = Timer(const Duration(milliseconds: 700), () async {
-      _restartPending = false;
-
-      if (_disposed || !_keepListening) return;
-
-      await _startSession();
-    });
   }
 
   Future<void> stop() async {
-    // Turn off restart first, because Android may emit "done" after stop().
-    _keepListening = false;
-    _restartTimer?.cancel();
-    _restartPending = false;
-
-    if (_speech.isListening) {
-      await _speech.stop();
+    _sessionActive = false;
+    _starting = false;
+    try {
+      if (_speech.isListening) await _speech.stop();
+    } catch (error) {
+      _onError?.call(error.toString());
     }
-
-    lastWords = [
-      ..._completedSegments,
-      if (_partialWords.isNotEmpty) _partialWords,
-    ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
-
+    _onListeningChanged?.call(false);
     _onResult?.call(lastWords, confidence);
   }
 
   Future<void> cancel() async {
-    _keepListening = false;
-    _restartTimer?.cancel();
-    _restartPending = false;
-
-    _completedSegments.clear();
-    _partialWords = '';
+    _sessionActive = false;
+    _starting = false;
+    try {
+      if (_speech.isListening) await _speech.cancel();
+    } catch (_) {}
     lastWords = '';
-    _onResult = null;
-
-    if (_speech.isListening) {
-      await _speech.cancel();
-    }
+    confidence = 0;
+    _onListeningChanged?.call(false);
   }
 
   void dispose() {
     _disposed = true;
-    _keepListening = false;
-    _restartTimer?.cancel();
+    _sessionActive = false;
+    _starting = false;
+    _onListeningChanged = null;
+    _onResult = null;
+    _onError = null;
     _speech.cancel();
   }
 }

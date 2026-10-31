@@ -49,3 +49,4 @@ app.*.map.json
 build/
 android/.gradle/
 android/local.properties
+/android/key.properties

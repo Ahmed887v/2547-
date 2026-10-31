@@ -73,9 +73,9 @@ class _PracticeScreenState extends State<PracticeScreen> {
 
   Future<void> _toggleMic() async {
     if (listening) {
+      setState(() => listening = false);
       await _speech.stop();
       if (!mounted) return;
-      setState(() => listening = false);
       await _evaluate();
       return;
     }
@@ -109,12 +109,31 @@ class _PracticeScreenState extends State<PracticeScreen> {
       lastFeedback = null;
     });
 
-    await _speech.start(
+    final started = await _speech.start(
       onResult: (words, conf) {
         if (_isDisposing || !mounted) return;
         setState(() => heard = words);
       },
+      onListeningChanged: (active) {
+        if (!mounted) return;
+        final wasListening = listening;
+        setState(() => listening = active);
+        // Score only when Android ends the session itself, not when start fails.
+        if (wasListening &&
+            !active &&
+            lastScore == null &&
+            heard.trim().isNotEmpty) {
+          _evaluate();
+        }
+      },
+      onError: (message) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Microphone: $message')),
+        );
+      },
     );
+    if (!started && mounted) setState(() => listening = false);
   }
 
   // Evaluate the answer and save useful learning items for later review.
