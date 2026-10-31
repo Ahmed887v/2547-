@@ -39,12 +39,12 @@ class TutorContentBank {
 
   List<TutorContentItem> _parse(String source, TutorContentKind kind) {
     final result = <TutorContentItem>[];
-    final blocks = source.split(RegExp(r'(?=^### Entry\\s+\\d+:)', multiLine: true));
+    final blocks = source.split(RegExp(r'(?=^### Entry\s+\d+:)', multiLine: true));
     for (final block in blocks) {
       if (!block.startsWith('### Entry')) continue;
       String field(String label) {
         final match = RegExp(
-          r'^- \\*\\*' + RegExp.escape(label) + r':\\*\\*\\s*(.*)$',
+          r'^- \*\*' + RegExp.escape(label) + r':\*\*\s*(.*)$',
           multiLine: true,
         ).firstMatch(block);
         return match?.group(1)?.trim() ?? '';
@@ -62,9 +62,9 @@ class TutorContentBank {
           ? 'English Example'
           : 'Example Sentence');
       final pronunciation = field('Phonetic Pronunciation');
-      final cleanPrompt = prompt.replaceFirst(RegExp(r'\\s*\\([^)]*\\)$'), '').trim();
+      final cleanPrompt = prompt.replaceFirst(RegExp(r'\s*\([^)]*\)$'), '').trim();
       if (cleanPrompt.isEmpty || meaning.isEmpty) continue;
-      final normalized = cleanPrompt.toLowerCase().replaceAll(RegExp(r'\\s+'), ' ');
+      final normalized = cleanPrompt.toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
       result.add(TutorContentItem(
         id: '${kind.name}_${normalized.hashCode.toUnsigned(32).toRadixString(16)}',
         kind: kind,
