@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,12 +48,30 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_storageKey) ?? [];
     for (final line in raw) {
+      try {
+        final decoded = jsonDecode(line);
+        if (decoded is Map) {
+          final role = decoded['role'];
+          final text = decoded['text'];
+          if ((role == 'user' || role == 'assistant') && text is String) {
+            _messages.add(_ChatMessage(
+              isUser: role == 'user',
+              text: text,
+            ));
+            continue;
+          }
+        }
+      } on FormatException {
+        // Migrate the previous compact u| / a| representation below.
+      }
+      // Backward compatibility with chat history saved by the first version.
       final split = line.indexOf('|');
-      if (split <= 0) continue;
-      _messages.add(_ChatMessage(
-        isUser: line.substring(0, split) == 'u',
-        text: line.substring(split + 1),
-      ));
+      if (split > 0 && (line.startsWith('u|') || line.startsWith('a|'))) {
+        _messages.add(_ChatMessage(
+          isUser: line.substring(0, split) == 'u',
+          text: line.substring(split + 1),
+        ));
+      }
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -60,7 +80,12 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(
       _storageKey,
-      _messages.map((m) => '${m.isUser ? 'u' : 'a'}|${m.text}').toList(),
+      _messages
+          .map((m) => jsonEncode({
+                'role': m.isUser ? 'user' : 'assistant',
+                'text': m.text,
+              }))
+          .toList(),
     );
   }
 
@@ -77,11 +102,13 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
     _jumpToBottom();
 
     try {
-      final history = _messages
-          .take(_messages.length - 1)
-          .toList()
-          .take(20)
-          .map((m) => {
+      final previousMessages = _messages.length > 1
+          ? _messages.sublist(0, _messages.length - 1)
+          : <_ChatMessage>[];
+      final recentHistory = previousMessages.length > 20
+          ? previousMessages.sublist(previousMessages.length - 20)
+          : previousMessages;
+      final history = recentHistory.map((m) => {
                 'role': m.isUser ? 'user' : 'assistant',
                 'content': m.text,
               })
@@ -122,7 +149,10 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
       _listening = true;
     });
     final started = await _speech.start(
-      onResult: (words, confidence) {
+      (words, confidence) {
+        if (mounted) _input.text = words;
+      },
+      onListeningChanged: (words, confidence) {
         if (mounted) _input.text = words;
       },
       onListeningChanged: (active) {
