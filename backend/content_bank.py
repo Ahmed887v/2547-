@@ -14,27 +14,27 @@ class ContentBank:
 
     @staticmethod
     def _field(block: str, label: str) -> str:
-        match = re.search(r"^- \\*\\*" + re.escape(label) + r":\\*\\*\\s*(.*)$", block, re.MULTILINE)
+        match = re.search(r"^- \*\*" + re.escape(label) + r":\*\*\s*(.*)$", block, re.MULTILINE)
         return match.group(1).strip() if match else ""
 
     @staticmethod
     def _normalize(value: str) -> str:
-        value = re.sub(r"\\s*\\([^)]*\\)$", "", value)
-        return re.sub(r"\\s+", " ", value).strip().casefold()
+        value = re.sub(r"\s*\([^)]*\)$", "", value)
+        return re.sub(r"\s+", " ", value).strip().casefold()
 
     def load(self) -> None:
         unique = {}
         for path, kind, prompt_label, meaning_label, example_label in self.paths:
             if not path.is_file():
                 raise RuntimeError(f"Learning bank file is missing: {path.name}")
-            blocks = re.split(r"(?=^### Entry\\s+\\d+:)", path.read_text(encoding="utf-8"), re.MULTILINE)
+            blocks = re.split(r"(?=^### Entry\s+\d+:)", path.read_text(encoding="utf-8"), re.MULTILINE)
             for block in blocks:
                 if not block.lstrip().startswith("### Entry"):
                     continue
                 prompt, meaning = self._field(block, prompt_label), self._field(block, meaning_label)
                 if not prompt or not meaning:
                     continue
-                clean = re.sub(r"\\s*\\([^)]*\\)$", "", prompt).strip()
+                clean = re.sub(r"\s*\([^)]*\)$", "", prompt).strip()
                 unique.setdefault((kind, self._normalize(clean)), {
                     "kind": kind, "prompt": clean, "meaning": meaning,
                     "arabic": self._field(block, "Arabic Definition") or self._field(block, "Arabic Meaning"),
