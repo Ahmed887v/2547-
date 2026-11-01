@@ -17,7 +17,6 @@ void main() {
     test('sends the conversation and returns the backend reply', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
-      final received = server.first;
 
       server.listen((request) async {
         final body = await utf8.decoder.bind(request).join();
@@ -44,7 +43,6 @@ void main() {
         ],
         message: 'I went to school yesterday.',
       );
-      await received;
       expect(reply, 'Good use of the past tense!');
     });
 
