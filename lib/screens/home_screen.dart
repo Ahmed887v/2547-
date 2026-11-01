@@ -13,6 +13,7 @@ import 'smart_tutor_screen.dart';
 import 'tutor_chat_screen.dart';
 import 'placement_test_screen.dart';
 import 'learning_history_screen.dart';
+import 'progress_report_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -292,6 +293,14 @@ class _LearnTab extends StatelessWidget {
           ),
           icon: const Icon(Icons.history_rounded, color: AppColors.blue),
           label: const Text('Learning history & review focus'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const ProgressReportScreen()),
+          ),
+          icon: const Icon(Icons.insights_rounded, color: AppColors.purple),
+          label: const Text('Progress report & practice analytics'),
         ),
         const SizedBox(height: 24),
         const Text(

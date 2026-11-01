@@ -8,9 +8,11 @@ import 'dart:io';
 /// The mobile app deliberately contains no provider API key. The backend owns
 /// provider credentials, rate limits, safety checks and conversation policy.
 class TutorChatService {
-  static const String endpoint = String.fromEnvironment(
-    'SPEAKLOCAL_TUTOR_API_URL',
-  );
+  TutorChatService({String? endpoint})
+      : endpoint = endpoint ??
+            const String.fromEnvironment('SPEAKLOCAL_TUTOR_API_URL');
+
+  final String endpoint;
 
   Future<String> send({
     required List<Map<String, String>> history,
