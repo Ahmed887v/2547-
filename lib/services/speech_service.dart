@@ -118,16 +118,22 @@ class SpeechService {
     }
   }
 
-  Future<void> stop() async {
-    _sessionActive = false;
+  Future<String> stop() async {
+    // Keep the session active while the platform flushes its final recognition
+    // result. Clearing it before stop() can discard the last transcript.
     _starting = false;
     try {
-      if (_speech.isListening) await _speech.stop();
+      if (_speech.isListening) {
+        await _speech.stop();
+      }
     } catch (error) {
       _onError?.call(error.toString());
     }
+    _sessionActive = false;
+    _starting = false;
     _onListeningChanged?.call(false);
     _onResult?.call(lastWords, confidence);
+    return lastWords.trim();
   }
 
   Future<void> cancel() async {
