@@ -152,9 +152,6 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
       (words, confidence) {
         if (mounted) _input.text = words;
       },
-      onListeningChanged: (words, confidence) {
-        if (mounted) _input.text = words;
-      },
       onListeningChanged: (active) {
         if (mounted) setState(() => _listening = active);
       },
