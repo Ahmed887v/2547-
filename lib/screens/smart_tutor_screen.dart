@@ -56,6 +56,7 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   final TutorContentBank _contentBank = TutorContentBank();
   final TutorLearnerProfile _learnerProfile = TutorLearnerProfile();
   SmartTutorEngine? _engine;
+  String? _lastItemId;
 
   @override
   void initState() {
@@ -93,10 +94,14 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
 
   Future<void> _togglePronunciation() async {
     if (_listening) {
-      setState(() => _listening = false);
-      await _speech.stop();
+      final spoken = await _speech.stop();
       if (!mounted) return;
-      final score = PronunciationScorer.score(_current!.prompt, _heard);
+      final transcript = spoken.isNotEmpty ? spoken : _heard;
+      setState(() {
+        _listening = false;
+        _heard = transcript;
+      });
+      final score = PronunciationScorer.score(_current!.prompt, transcript);
       setState(() {
         _pronunciationScore = score;
       });
@@ -122,9 +127,9 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
           score: score,
           exerciseType: 'smart_tutor_speech',
         );
-        if (score < 75 && _heard.trim().isNotEmpty && mounted) {
+        if (score < 75 && transcript.trim().isNotEmpty && mounted) {
           await context.read<LearningMemoryService>().recordCorrection(
-                original: _heard.trim(),
+                original: transcript.trim(),
                 corrected: item.prompt,
                 explanation:
                     'Smart Tutor speech transcript did not closely match the target. This is transcript matching, not acoustic pronunciation analysis.',
@@ -228,11 +233,17 @@ class _SmartTutorScreenState extends State<SmartTutorScreen> {
   }
 
   void _next() {
-    final selected = _engine?.nextItem();
+    // Avoid showing the same weak item repeatedly when the learner is stuck.
+    // The engine still prioritizes due/weak material, but rotates to another
+    // available item before returning to the previous one.
+    final selected = _engine?.nextItem(
+      exclude: _lastItemId == null ? const {} : {_lastItemId!},
+    );
     if (selected == null) {
       _current = null;
       return;
     }
+    _lastItemId = selected.id;
     _current = _toTutorItem(selected);
     _selected = null;
     _showMeaning = false;
