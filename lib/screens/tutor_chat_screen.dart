@@ -149,7 +149,7 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
       _listening = true;
     });
     final started = await _speech.start(
-      (words, confidence) {
+      onResult: (words, confidence) {
         if (mounted) _input.text = words;
       },
       onListeningChanged: (active) {
@@ -369,10 +369,12 @@ class _TutorChatScreenState extends State<TutorChatScreen> {
   Future<void> _clearChat() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_storageKey);
-    if (mounted) setState(() {
-      _messages.clear();
-      _error = null;
-    });
+    if (mounted) {
+      setState(() {
+        _messages.clear();
+        _error = null;
+      });
+    }
   }
 }
 
