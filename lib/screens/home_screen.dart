@@ -10,6 +10,7 @@ import 'lesson_map_screen.dart';
 import 'profile_screen.dart';
 import 'practice_screen.dart';
 import 'smart_tutor_screen.dart';
+import 'tutor_chat_screen.dart';
 import 'placement_test_screen.dart';
 import 'learning_history_screen.dart';
 
@@ -28,6 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final pages = [
       const _LearnTab(),
       const LessonMapScreen(),
+      const TutorChatScreen(),
       const ProfileScreen(),
     ];
 
@@ -51,6 +53,10 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBarItem(
               icon: Icon(Icons.map_rounded),
               label: 'Path',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.forum_rounded),
+              label: 'Tutor',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person_rounded),
