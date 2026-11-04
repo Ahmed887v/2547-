@@ -9,8 +9,6 @@ import '../widgets/stat_chip.dart';
 import 'lesson_map_screen.dart';
 import 'profile_screen.dart';
 import 'practice_screen.dart';
-import 'smart_tutor_screen.dart';
-import 'tutor_chat_screen.dart';
 import 'placement_test_screen.dart';
 import 'learning_history_screen.dart';
 import 'progress_report_screen.dart';
@@ -30,7 +28,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final pages = [
       const _LearnTab(),
       const LessonMapScreen(),
-      const TutorChatScreen(),
       const ProfileScreen(),
     ];
 
@@ -54,10 +51,6 @@ class _HomeScreenState extends State<HomeScreen> {
             BottomNavigationBarItem(
               icon: Icon(Icons.map_rounded),
               label: 'Path',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.forum_rounded),
-              label: 'Tutor',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.person_rounded),
@@ -205,60 +198,6 @@ class _LearnTab extends StatelessWidget {
           },
         ),
         const SizedBox(height: 20),
-        InkWell(
-          borderRadius: BorderRadius.circular(24),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const SmartTutorScreen()),
-          ),
-          child: Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF173D35), Color(0xFF28785D)],
-              ),
-              borderRadius: BorderRadius.circular(24),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 54,
-                  height: 54,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.14),
-                    borderRadius: BorderRadius.circular(17),
-                  ),
-                  child: const Icon(Icons.auto_awesome_rounded,
-                      color: Color(0xFFB7F3D3), size: 30),
-                ),
-                const SizedBox(width: 14),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('NEW · SMART TUTOR',
-                          style: TextStyle(
-                              color: Color(0xFFB7F3D3),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w900)),
-                      SizedBox(height: 5),
-                      Text('Vocabulary + American slang',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 17,
-                              fontWeight: FontWeight.w900)),
-                      SizedBox(height: 4),
-                      Text('Quick questions, instant feedback, offline',
-                          style:
-                              TextStyle(color: Colors.white70, fontSize: 12)),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.arrow_forward_ios_rounded,
-                    color: Colors.white, size: 18),
-              ],
-            ),
-          ),
-        ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(
