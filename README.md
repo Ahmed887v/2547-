@@ -1,6 +1,6 @@
 # SpeakLocal
 
-SpeakLocal is a Flutter Android app for English practice. It includes lesson practice, local progress, placement testing, learning history, an adaptive offline vocabulary tutor, and a dedicated text/voice Smart Tutor chat interface.
+SpeakLocal is an offline-first Flutter Android app for English practice. The app focuses on structured lessons, speaking practice, local progress tracking, placement testing, learning history, and practice analytics. It does not include a Smart Tutor chat, AI tutor backend, Firebase integration, or account-based cloud services.
 
 ## Requirements
 
@@ -49,54 +49,13 @@ flutter build appbundle --release
 
 Release signing must be configured locally. Never commit keystore files, passwords, or `key.properties`.
 
-## Smart Tutor chat backend
-
-The Smart Tutor chat tab is a client for a separately hosted backend. It does not pretend to be an AI when no backend is configured.
-
-Set the endpoint at build time:
-
-```bash
-flutter build apk --debug \
-  --dart-define=SPEAKLOCAL_TUTOR_API_URL=https://YOUR_DOMAIN/api/tutor/chat
-```
-
-The endpoint must accept an HTTP POST with JSON:
-
-```json
-{
-  "message": "I went to school yesterday.",
-  "history": [
-    {"role": "user", "content": "Hello!"},
-    {"role": "assistant", "content": "Hello! How can I help you practice?"}
-  ],
-  "language": "en",
-  "mode": "english_tutor"
-}
-```
-
-Return JSON containing a non-empty `reply` string:
-
-```json
-{"reply":"Good sentence! Remember to use the past form 'went' for yesterday."}
-```
-
-The backend should:
-- Keep model-provider API keys on the server, never in the mobile app.
-- Validate and limit message/history sizes.
-- Apply rate limits and appropriate content-safety controls.
-- Avoid retaining conversation data unless the user has been informed and the retention is necessary.
-- Return useful HTTP error codes and JSON responses.
-
-The mobile chat currently stores the conversation locally in SharedPreferences. Voice input uses Android speech recognition; assistant replies can be read aloud using Android text-to-speech. Speech recognition availability depends on the device and installed speech services.
-
 ## Current learning components
 
 - Lesson practice and progress: `ProgressService`.
 - Learning corrections and vocabulary memory: `LearningMemoryService`.
 - Practice analytics: `PracticeAnalyticsService`.
-- Adaptive vocabulary/slang content: `TutorContentBank`, `TutorLearnerProfile`, and `SmartTutorEngine`.
-- Smart Tutor conversation UI: `TutorChatScreen`.
-- Chat transport: `TutorChatService`.
+- Speech input and on-device text-to-speech.
+- Placement testing, learning history, and progress reporting.
 
 ## Important evaluation note
 
